@@ -1,8 +1,10 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 $id_fattura = isset($_GET['id']) ? intval($_GET['id']) : 0;
 
@@ -10,7 +12,7 @@ if ($id_fattura <= 0) {
     die('ID fattura non valido');
 }
 
-// Recupera info fattura + eventuale fattura elettronica
+// Recupera info fattura + eventuale fattura elettronica (scoped al tenant)
 $stmt = $conn->prepare(
     "SELECT f.*,
             fe.pdf_filename AS fe_pdf_filename,
@@ -19,9 +21,9 @@ $stmt = $conn->prepare(
             fe.xml_path     AS fe_xml_path
      FROM tb_fatture f
      LEFT JOIN tb_fatture_elettroniche fe ON fe.numero_proforma = f.id_fattura
-     WHERE f.id_fattura = ?"
+     WHERE f.id_fattura = ? AND f.tenant_id = ?"
 );
-$stmt->bind_param('i', $id_fattura);
+$stmt->bind_param('ii', $id_fattura, $tenant_id);
 $stmt->execute();
 $result = $stmt->get_result();
 

@@ -1,6 +1,7 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
 // Solo admin e user
 if (!in_array($_SESSION['ruolo'] ?? '', ['admin', 'user'], true)) {
@@ -8,18 +9,28 @@ if (!in_array($_SESSION['ruolo'] ?? '', ['admin', 'user'], true)) {
     exit;
 }
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
-$anagrafiche = mysqli_fetch_all(mysqli_query($conn, 'SELECT id_anagrafica, denominazione FROM tb_anagrafiche ORDER BY denominazione'), MYSQLI_ASSOC);
-$clienti     = mysqli_fetch_all(mysqli_query($conn, 'SELECT id_cliente, denominazione FROM tb_clienti ORDER BY denominazione'), MYSQLI_ASSOC);
+$_stm_an = mysqli_prepare($conn, 'SELECT id_anagrafica, denominazione FROM tb_anagrafiche WHERE tenant_id = ? ORDER BY denominazione');
+mysqli_stmt_bind_param($_stm_an, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_an);
+$anagrafiche = mysqli_fetch_all(mysqli_stmt_get_result($_stm_an), MYSQLI_ASSOC);
 
-// Recupero progetti con cliente per dropdown
-$result_prj = mysqli_query($conn,
+$_stm_cl = mysqli_prepare($conn, 'SELECT id_cliente, denominazione FROM tb_clienti WHERE tenant_id = ? ORDER BY denominazione');
+mysqli_stmt_bind_param($_stm_cl, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_cl);
+$clienti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_cl), MYSQLI_ASSOC);
+
+$_stm_prj = mysqli_prepare($conn,
     'SELECT p.id_progetto, p.nome_progetto, c.denominazione AS cliente_nome
      FROM tb_progetti p
      JOIN tb_clienti c ON p.id_cliente = c.id_cliente
+     WHERE p.tenant_id = ?
      ORDER BY c.denominazione, p.nome_progetto');
-$progetti = mysqli_fetch_all($result_prj, MYSQLI_ASSOC);
+mysqli_stmt_bind_param($_stm_prj, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_prj);
+$progetti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_prj), MYSQLI_ASSOC);
 
 mysqli_close($conn);
 

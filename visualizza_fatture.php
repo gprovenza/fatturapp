@@ -1,8 +1,10 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 // Eliminazione fattura
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
@@ -10,9 +12,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 
     $id_fattura = intval($_POST['id_fattura'] ?? 0);
 
-    // Recupera info fattura
-    $stmt = mysqli_prepare($conn, 'SELECT numero_fattura, pdf_path FROM tb_fatture WHERE id_fattura = ?');
-    mysqli_stmt_bind_param($stmt, 'i', $id_fattura);
+    // Recupera info fattura (scoped al tenant)
+    $stmt = mysqli_prepare($conn, 'SELECT numero_fattura, pdf_path FROM tb_fatture WHERE id_fattura = ? AND tenant_id = ?');
+    mysqli_stmt_bind_param($stmt, 'ii', $id_fattura, $tenant_id);
     mysqli_stmt_execute($stmt);
     $fattura_da_eliminare = mysqli_stmt_get_result($stmt)->fetch_assoc();
     mysqli_stmt_close($stmt);
@@ -30,8 +32,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
         } else {
             mysqli_begin_transaction($conn);
             try {
-                $stmt_del = mysqli_prepare($conn, 'DELETE FROM tb_fatture WHERE id_fattura = ?');
-                mysqli_stmt_bind_param($stmt_del, 'i', $id_fattura);
+                $stmt_del = mysqli_prepare($conn, 'DELETE FROM tb_fatture WHERE id_fattura = ? AND tenant_id = ?');
+                mysqli_stmt_bind_param($stmt_del, 'ii', $id_fattura, $tenant_id);
                 mysqli_stmt_execute($stmt_del);
                 mysqli_stmt_close($stmt_del);
 
@@ -64,10 +66,11 @@ if ($search !== '') {
         'SELECT COUNT(*)
          FROM tb_fatture f
          JOIN tb_clienti c ON f.cliente_id = c.id_cliente
-         WHERE f.numero_fattura LIKE ? OR c.denominazione LIKE ? OR f.mese LIKE ? OR CAST(f.anno AS CHAR) LIKE ?');
-    mysqli_stmt_bind_param($stmt_cnt, 'ssss', $like, $like, $like, $like);
+         WHERE f.tenant_id = ? AND (f.numero_fattura LIKE ? OR c.denominazione LIKE ? OR f.mese LIKE ? OR CAST(f.anno AS CHAR) LIKE ?)');
+    mysqli_stmt_bind_param($stmt_cnt, 'issss', $tenant_id, $like, $like, $like, $like);
 } else {
-    $stmt_cnt = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_fatture');
+    $stmt_cnt = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_fatture WHERE tenant_id = ?');
+    mysqli_stmt_bind_param($stmt_cnt, 'i', $tenant_id);
 }
 mysqli_stmt_execute($stmt_cnt);
 $total_records = (int) mysqli_stmt_get_result($stmt_cnt)->fetch_row()[0];
@@ -90,13 +93,10 @@ if ($search !== '') {
          JOIN tb_clienti c ON f.cliente_id = c.id_cliente
          LEFT JOIN tb_fatture_elettroniche fe ON fe.numero_proforma = f.id_fattura
          LEFT JOIN tb_anagrafiche a ON f.anagrafica_id = a.id_anagrafica
-         WHERE f.numero_fattura LIKE ?
-            OR c.denominazione LIKE ?
-            OR f.mese LIKE ?
-            OR CAST(f.anno AS CHAR) LIKE ?
+         WHERE f.tenant_id = ? AND (f.numero_fattura LIKE ? OR c.denominazione LIKE ? OR f.mese LIKE ? OR CAST(f.anno AS CHAR) LIKE ?)
          ORDER BY f.data_creazione DESC
          LIMIT ? OFFSET ?');
-    mysqli_stmt_bind_param($stmt_q, 'ssssii', $like, $like, $like, $like, $records_per_page, $offset);
+    mysqli_stmt_bind_param($stmt_q, 'issssii', $tenant_id, $like, $like, $like, $like, $records_per_page, $offset);
 } else {
     $stmt_q = mysqli_prepare($conn,
         'SELECT f.*, c.denominazione AS cliente_nome,
@@ -109,9 +109,10 @@ if ($search !== '') {
          JOIN tb_clienti c ON f.cliente_id = c.id_cliente
          LEFT JOIN tb_fatture_elettroniche fe ON fe.numero_proforma = f.id_fattura
          LEFT JOIN tb_anagrafiche a ON f.anagrafica_id = a.id_anagrafica
+         WHERE f.tenant_id = ?
          ORDER BY f.data_creazione DESC
          LIMIT ? OFFSET ?');
-    mysqli_stmt_bind_param($stmt_q, 'ii', $records_per_page, $offset);
+    mysqli_stmt_bind_param($stmt_q, 'iii', $tenant_id, $records_per_page, $offset);
 }
 mysqli_stmt_execute($stmt_q);
 $rows = mysqli_fetch_all(mysqli_stmt_get_result($stmt_q), MYSQLI_ASSOC);

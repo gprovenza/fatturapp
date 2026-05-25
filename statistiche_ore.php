@@ -1,42 +1,43 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 $anno_corrente = max(2020, min(2035, intval($_GET['anno'] ?? date('Y'))));
 
 // Recupera percentuale tasse dall'anagrafica (fallback a costante)
 $tasse_pct = TAX_PERCENTAGE;
-$res_tasse = mysqli_query($conn, 'SELECT tasse_percentuale FROM tb_anagrafiche LIMIT 1');
-if ($row_tasse = mysqli_fetch_assoc($res_tasse)) {
+$_stm_tx = mysqli_prepare($conn, 'SELECT tasse_percentuale FROM tb_anagrafiche WHERE tenant_id = ? LIMIT 1');
+mysqli_stmt_bind_param($_stm_tx, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_tx);
+if ($row_tasse = mysqli_fetch_assoc(mysqli_stmt_get_result($_stm_tx))) {
     $tasse_pct = floatval($row_tasse['tasse_percentuale']);
 }
+mysqli_stmt_close($_stm_tx);
 $netto_pct = 1 - ($tasse_pct / 100);
 
-// ============================================================
-// QUERY MENSILE ottimizzata (JOIN invece di subquery correlata)
-// ============================================================
-// Fatturato per mese — query separata per evitare che il JOIN 1:N con tb_fatture_dettaglio
-// moltiplichi totale_fattura per il numero di righe dettaglio di ogni fattura
+// Fatturato per mese
 $stmt_fatt = mysqli_prepare($conn,
     'SELECT mese, SUM(totale_fattura) AS totale_fatturato
      FROM tb_fatture
-     WHERE anno = ?
+     WHERE tenant_id = ? AND anno = ?
      GROUP BY mese
      ORDER BY mese');
-mysqli_stmt_bind_param($stmt_fatt, 'i', $anno_corrente);
+mysqli_stmt_bind_param($stmt_fatt, 'ii', $tenant_id, $anno_corrente);
 mysqli_stmt_execute($stmt_fatt);
 $result_fatturato = mysqli_stmt_get_result($stmt_fatt);
 
-// Ore per mese — da tb_fatture_dettaglio
+// Ore per mese
 $stmt_ore_m = mysqli_prepare($conn,
     'SELECT f.mese, COALESCE(SUM(fd.ore_erogate), 0) AS totale_ore
      FROM tb_fatture_dettaglio fd
      JOIN tb_fatture f ON fd.id_fattura = f.id_fattura
-     WHERE f.anno = ?
+     WHERE f.tenant_id = ? AND f.anno = ?
      GROUP BY f.mese');
-mysqli_stmt_bind_param($stmt_ore_m, 'i', $anno_corrente);
+mysqli_stmt_bind_param($stmt_ore_m, 'ii', $tenant_id, $anno_corrente);
 mysqli_stmt_execute($stmt_ore_m);
 $result_ore_mens = mysqli_stmt_get_result($stmt_ore_m);
 
@@ -71,10 +72,10 @@ $stmt_prj = mysqli_prepare($conn,
      FROM tb_fatture_dettaglio fd
      JOIN tb_progetti p  ON fd.progetto_id = p.id_progetto
      JOIN tb_fatture f   ON fd.id_fattura  = f.id_fattura
-     WHERE f.anno = ?
+     WHERE f.tenant_id = ? AND f.anno = ?
      GROUP BY p.id_progetto, p.nome_progetto
      ORDER BY totale_fatturato DESC');
-mysqli_stmt_bind_param($stmt_prj, 'i', $anno_corrente);
+mysqli_stmt_bind_param($stmt_prj, 'ii', $tenant_id, $anno_corrente);
 mysqli_stmt_execute($stmt_prj);
 $progetti_rows = mysqli_fetch_all(mysqli_stmt_get_result($stmt_prj), MYSQLI_ASSOC);
 mysqli_stmt_close($stmt_prj);

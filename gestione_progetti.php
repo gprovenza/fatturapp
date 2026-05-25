@@ -1,12 +1,14 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
 if (!in_array($_SESSION['ruolo'] ?? '', ['admin', 'user'], true)) {
     header('Location: index.php'); exit;
 }
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_verify();
@@ -20,8 +22,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id_cliente = intval($_POST['id_cliente'] ?? 0);
 
         $stmt = mysqli_prepare($conn,
-            'INSERT INTO tb_progetti (nome_progetto, CUP, paga_oraria, tariffa_gruppo, id_cliente) VALUES (?, ?, ?, ?, ?)');
-        mysqli_stmt_bind_param($stmt, 'ssddi', $nome, $cup, $paga, $gruppo, $id_cliente);
+            'INSERT INTO tb_progetti (nome_progetto, CUP, paga_oraria, tariffa_gruppo, id_cliente, tenant_id) VALUES (?, ?, ?, ?, ?, ?)');
+        mysqli_stmt_bind_param($stmt, 'ssddii', $nome, $cup, $paga, $gruppo, $id_cliente, $tenant_id);
         mysqli_stmt_execute($stmt) ? set_flash('Progetto aggiunto!', 'success') : set_flash('Errore durante l\'inserimento.', 'danger');
         mysqli_stmt_close($stmt);
 
@@ -34,16 +36,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id_cliente = intval($_POST['id_cliente'] ?? 0);
 
         $stmt = mysqli_prepare($conn,
-            'UPDATE tb_progetti SET nome_progetto=?, CUP=?, paga_oraria=?, tariffa_gruppo=?, id_cliente=? WHERE id_progetto=?');
-        mysqli_stmt_bind_param($stmt, 'ssddii', $nome, $cup, $paga, $gruppo, $id_cliente, $id);
+            'UPDATE tb_progetti SET nome_progetto=?, CUP=?, paga_oraria=?, tariffa_gruppo=?, id_cliente=?
+             WHERE id_progetto=? AND tenant_id=?');
+        mysqli_stmt_bind_param($stmt, 'ssddiii', $nome, $cup, $paga, $gruppo, $id_cliente, $id, $tenant_id);
         mysqli_stmt_execute($stmt) ? set_flash('Progetto modificato!', 'success') : set_flash('Errore modifica.', 'danger');
         mysqli_stmt_close($stmt);
 
     } elseif ($action === 'delete') {
         $id = intval($_POST['id_progetto']);
-        // Controlla ore lavorate collegate
-        $stmt_chk = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_ore_lavoro WHERE progetto_id = ?');
-        mysqli_stmt_bind_param($stmt_chk, 'i', $id);
+        $stmt_chk = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_ore_lavoro WHERE progetto_id = ? AND tenant_id = ?');
+        mysqli_stmt_bind_param($stmt_chk, 'ii', $id, $tenant_id);
         mysqli_stmt_execute($stmt_chk);
         $n = intval(mysqli_stmt_get_result($stmt_chk)->fetch_row()[0]);
         mysqli_stmt_close($stmt_chk);
@@ -51,8 +53,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($n > 0) {
             set_flash("Impossibile eliminare: $n registrazioni ore collegate a questo progetto.", 'danger');
         } else {
-            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_progetti WHERE id_progetto = ?');
-            mysqli_stmt_bind_param($stmt, 'i', $id);
+            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_progetti WHERE id_progetto = ? AND tenant_id = ?');
+            mysqli_stmt_bind_param($stmt, 'ii', $id, $tenant_id);
             mysqli_stmt_execute($stmt) ? set_flash('Progetto eliminato.', 'success') : set_flash('Errore eliminazione.', 'danger');
             mysqli_stmt_close($stmt);
         }
@@ -62,12 +64,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$progetti = mysqli_fetch_all(mysqli_query($conn,
+$_stm_pg = mysqli_prepare($conn,
     'SELECT p.*, c.denominazione AS cliente_nome
      FROM tb_progetti p
      LEFT JOIN tb_clienti c ON p.id_cliente = c.id_cliente
-     ORDER BY c.denominazione, p.nome_progetto'), MYSQLI_ASSOC);
-$clienti  = mysqli_fetch_all(mysqli_query($conn, 'SELECT id_cliente, denominazione FROM tb_clienti ORDER BY denominazione'), MYSQLI_ASSOC);
+     WHERE p.tenant_id = ?
+     ORDER BY c.denominazione, p.nome_progetto');
+mysqli_stmt_bind_param($_stm_pg, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_pg);
+$progetti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_pg), MYSQLI_ASSOC);
+
+$_stm_cl = mysqli_prepare($conn, 'SELECT id_cliente, denominazione FROM tb_clienti WHERE tenant_id = ? ORDER BY denominazione');
+mysqli_stmt_bind_param($_stm_cl, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_cl);
+$clienti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_cl), MYSQLI_ASSOC);
 mysqli_close($conn);
 
 $page_title  = 'Gestione Progetti';

@@ -38,11 +38,27 @@ define('SITE_URL',    getenv('SITE_URL')    ?: 'https://web.prov-home.dedyn.io/f
 define('PDF_DIR',     __DIR__ . '/pdf/');
 define('UPLOAD_DIR',  __DIR__ . '/fatture_elettroniche/');
 
-// Costanti business (modificabili anche da DB in futuro)
+// Costanti business
 define('TAX_PERCENTAGE',  35.0);   // % tasse forfettarie
 define('MARCA_BOLLO',      2.0);   // € marca da bollo
 define('MAX_UPLOAD_MB',   20);     // MB max per upload fatture
 define('SESSION_TIMEOUT', 1800);   // secondi di inattività prima del logout
+
+// SaaS — PayPal REST API v2
+define('PAYPAL_CLIENT_ID',     getenv('PAYPAL_CLIENT_ID')     ?: '');
+define('PAYPAL_CLIENT_SECRET', getenv('PAYPAL_CLIENT_SECRET') ?: '');
+define('PAYPAL_PLAN_ID_PRO',   getenv('PAYPAL_PLAN_ID_PRO')   ?: '');   // ID piano PayPal mensile €7
+define('PAYPAL_MODE',          getenv('PAYPAL_MODE')          ?: 'sandbox'); // 'sandbox' | 'live'
+define('PAYPAL_API_BASE',      PAYPAL_MODE === 'live'
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com');
+
+// SaaS — Email (usato da includes/mailer.php)
+define('SMTP_FROM',      getenv('SMTP_FROM')      ?: 'noreply@fatturapp.it');
+define('SMTP_FROM_NAME', getenv('SMTP_FROM_NAME') ?: 'fatturapp');
+
+// SaaS — URL base app (usato nei link email)
+define('APP_URL', rtrim(SITE_URL, '/') . '/');
 
 // Errori: mostra in development, nascondi in production
 if (defined('APP_ENV') && APP_ENV === 'development') {

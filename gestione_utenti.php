@@ -1,8 +1,10 @@
 <?php
 require_once 'auth_admin.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_verify();
@@ -34,8 +36,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $hash = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = mysqli_prepare($conn, 'INSERT INTO tb_utenti (username, password_hash, ruolo, email) VALUES (?, ?, ?, ?)');
-            mysqli_stmt_bind_param($stmt, 'ssss', $username, $hash, $ruolo, $email);
+            $stmt = mysqli_prepare($conn, 'INSERT INTO tb_utenti (tenant_id, username, password_hash, ruolo, email, email_verified_at) VALUES (?, ?, ?, ?, ?, NOW())');
+            mysqli_stmt_bind_param($stmt, 'issss', $tenant_id, $username, $hash, $ruolo, $email);
             mysqli_stmt_execute($stmt)
                 ? set_flash('Utente creato con successo!', 'success')
                 : set_flash('Errore: ' . mysqli_error($conn), 'danger');
@@ -49,11 +51,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $ruolo    = in_array($_POST['ruolo'] ?? '', ['admin', 'user', 'commercialista'], true)
                         ? $_POST['ruolo'] : 'user';
 
-            // Impedisce di togliere l'ultimo admin
+            // Impedisce di togliere l'ultimo admin (scoped al tenant)
             if ($ruolo !== 'admin') {
                 $stmt_cnt = mysqli_prepare($conn,
-                    "SELECT COUNT(*) FROM tb_utenti WHERE ruolo = 'admin' AND id_utente != ?");
-                mysqli_stmt_bind_param($stmt_cnt, 'i', $id);
+                    "SELECT COUNT(*) FROM tb_utenti WHERE tenant_id = ? AND ruolo = 'admin' AND id_utente != ?");
+                mysqli_stmt_bind_param($stmt_cnt, 'ii', $tenant_id, $id);
                 mysqli_stmt_execute($stmt_cnt);
                 $n = intval(mysqli_stmt_get_result($stmt_cnt)->fetch_row()[0]);
                 mysqli_stmt_close($stmt_cnt);
@@ -63,8 +65,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
-            $stmt = mysqli_prepare($conn, 'UPDATE tb_utenti SET username=?, email=?, ruolo=? WHERE id_utente=?');
-            mysqli_stmt_bind_param($stmt, 'sssi', $username, $email, $ruolo, $id);
+            $stmt = mysqli_prepare($conn, 'UPDATE tb_utenti SET username=?, email=?, ruolo=? WHERE id_utente=? AND tenant_id=?');
+            mysqli_stmt_bind_param($stmt, 'sssii', $username, $email, $ruolo, $id, $tenant_id);
             mysqli_stmt_execute($stmt)
                 ? set_flash('Utente modificato con successo!', 'success')
                 : set_flash('Errore modifica: ' . mysqli_error($conn), 'danger');
@@ -79,8 +81,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
             $hash = password_hash($pwd, PASSWORD_DEFAULT);
-            $stmt = mysqli_prepare($conn, 'UPDATE tb_utenti SET password_hash=? WHERE id_utente=?');
-            mysqli_stmt_bind_param($stmt, 'si', $hash, $id);
+            $stmt = mysqli_prepare($conn, 'UPDATE tb_utenti SET password_hash=? WHERE id_utente=? AND tenant_id=?');
+            mysqli_stmt_bind_param($stmt, 'sii', $hash, $id, $tenant_id);
             mysqli_stmt_execute($stmt)
                 ? set_flash('Password resettata con successo!', 'success')
                 : set_flash('Errore reset password: ' . mysqli_error($conn), 'danger');
@@ -93,14 +95,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 set_flash('Non puoi eliminare il tuo stesso account!', 'danger');
                 break;
             }
-            $stmt_info = mysqli_prepare($conn, 'SELECT ruolo FROM tb_utenti WHERE id_utente=?');
-            mysqli_stmt_bind_param($stmt_info, 'i', $id);
+            $stmt_info = mysqli_prepare($conn, 'SELECT ruolo FROM tb_utenti WHERE id_utente=? AND tenant_id=?');
+            mysqli_stmt_bind_param($stmt_info, 'ii', $id, $tenant_id);
             mysqli_stmt_execute($stmt_info);
             $user_info = mysqli_stmt_get_result($stmt_info)->fetch_assoc();
             mysqli_stmt_close($stmt_info);
 
             if ($user_info && $user_info['ruolo'] === 'admin') {
-                $stmt_cnt = mysqli_prepare($conn, "SELECT COUNT(*) FROM tb_utenti WHERE ruolo = 'admin'");
+                $stmt_cnt = mysqli_prepare($conn, "SELECT COUNT(*) FROM tb_utenti WHERE tenant_id=? AND ruolo = 'admin'");
+                mysqli_stmt_bind_param($stmt_cnt, 'i', $tenant_id);
                 mysqli_stmt_execute($stmt_cnt);
                 $n = intval(mysqli_stmt_get_result($stmt_cnt)->fetch_row()[0]);
                 mysqli_stmt_close($stmt_cnt);
@@ -110,8 +113,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
-            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_utenti WHERE id_utente=?');
-            mysqli_stmt_bind_param($stmt, 'i', $id);
+            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_utenti WHERE id_utente=? AND tenant_id=?');
+            mysqli_stmt_bind_param($stmt, 'ii', $id, $tenant_id);
             mysqli_stmt_execute($stmt)
                 ? set_flash('Utente eliminato con successo!', 'success')
                 : set_flash('Errore eliminazione: ' . mysqli_error($conn), 'danger');
@@ -123,10 +126,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$utenti = mysqli_fetch_all(
-    mysqli_query($conn, "SELECT * FROM tb_utenti ORDER BY ruolo DESC, username"),
-    MYSQLI_ASSOC
-);
+$_stm_ut = mysqli_prepare($conn, 'SELECT * FROM tb_utenti WHERE tenant_id = ? ORDER BY ruolo DESC, username');
+mysqli_stmt_bind_param($_stm_ut, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_ut);
+$utenti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_ut), MYSQLI_ASSOC);
 mysqli_close($conn);
 
 $page_title   = 'Gestione Utenti';

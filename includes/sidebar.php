@@ -8,8 +8,14 @@
  * Usa $_SESSION['ruolo'] per i link condizionali.
  */
 
-$_current = $current_page ?? basename($_SERVER['PHP_SELF']);
-$_ruolo   = $_SESSION['ruolo'] ?? 'user';
+require_once __DIR__ . '/tenant.php';
+
+$_current    = $current_page ?? basename($_SERVER['PHP_SELF']);
+$_ruolo      = $_SESSION['ruolo'] ?? 'user';
+$_plan       = getTenantPlan();
+$_trialDays  = getTrialDaysLeft();
+$_subActive  = isSubActive();
+$_isSaasAdm  = isSaasAdmin();
 
 function _sidebar_link(string $href, string $icon, string $label, string $current): string {
     $active = (basename($href) === $current) ? ' active' : '';
@@ -89,6 +95,41 @@ function _sidebar_link(string $href, string $icon, string $label, string $curren
     <?php endif; ?>
     <?= _sidebar_link('cambia_password.php',  'key',               'Cambia Password',    $_current) ?>
 
+    <!-- SAAS -->
+    <div class="sidebar-section-label">Abbonamento</div>
+    <?php
+    // Percorso relativo verso saas/ (funziona sia dalla root che da sottodirectory)
+    $_saas_base = str_repeat('../', max(0, substr_count(str_replace($_SERVER['DOCUMENT_ROOT'], '', $_SERVER['SCRIPT_FILENAME']), '/') - 1));
+    ?>
+    <?= _sidebar_link($_saas_base . 'saas/billing.php', 'credit-card', 'Abbonamento', basename($_SERVER['PHP_SELF'])) ?>
+    <?php if ($_isSaasAdm): ?>
+    <?= _sidebar_link($_saas_base . 'saas/admin/dashboard.php', 'speedometer2', 'Admin SaaS', basename($_SERVER['PHP_SELF'])) ?>
+    <?php endif; ?>
+
+    <!-- Banner trial / scaduto -->
+    <?php if ($_plan['status'] === 'trial' && $_trialDays > 0): ?>
+    <div style="margin:8px 8px 0;padding:8px 10px;background:rgba(37,99,235,.12);border-radius:8px;border:1px solid rgba(37,99,235,.25)">
+      <div style="font-size:.72rem;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">
+        <i class="bi bi-clock-history me-1"></i>Trial gratuito
+      </div>
+      <div style="font-size:.8rem">Scade tra <strong><?= $_trialDays ?></strong> giorn<?= $_trialDays === 1 ? 'o' : 'i' ?></div>
+      <a href="<?= htmlspecialchars($_saas_base . 'saas/billing.php', ENT_QUOTES, 'UTF-8') ?>"
+         style="display:block;margin-top:6px;padding:4px 0;background:#2563eb;color:#fff;border-radius:5px;text-decoration:none;font-size:.74rem;font-weight:600;text-align:center">
+        Attiva piano Pro →
+      </a>
+    </div>
+    <?php elseif (!$_subActive && !$_isSaasAdm): ?>
+    <div style="margin:8px 8px 0;padding:8px 10px;background:rgba(220,38,38,.1);border-radius:8px;border:1px solid rgba(220,38,38,.25)">
+      <div style="font-size:.72rem;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.4px">
+        <i class="bi bi-exclamation-circle me-1"></i>Abbonamento scaduto
+      </div>
+      <a href="<?= htmlspecialchars($_saas_base . 'saas/billing.php', ENT_QUOTES, 'UTF-8') ?>"
+         style="display:block;margin-top:6px;padding:4px 0;background:#dc2626;color:#fff;border-radius:5px;text-decoration:none;font-size:.74rem;font-weight:600;text-align:center">
+        Rinnova ora →
+      </a>
+    </div>
+    <?php endif; ?>
+
     <!-- Footer sidebar -->
     <div class="sidebar-footer">
         <div class="d-flex align-items-center gap-2 mb-2">
@@ -97,6 +138,14 @@ function _sidebar_link(string $href, string $icon, string $label, string $curren
                 <div class="user-name text-truncate"><?= htmlspecialchars($_SESSION['username'] ?? '', ENT_QUOTES, 'UTF-8') ?></div>
                 <span class="badge bg-<?= $_ruolo === 'admin' ? 'danger' : ($_ruolo === 'commercialista' ? 'info' : 'secondary') ?> text-uppercase" style="font-size:.6rem;letter-spacing:.4px;">
                     <?= htmlspecialchars($_ruolo, ENT_QUOTES, 'UTF-8') ?>
+                </span>
+                <?php
+                $planBadgeColor = $_plan['name'] === 'pro' ? '#2563eb' : '#64748b';
+                $planLabel = strtoupper($_plan['name']);
+                if ($_plan['status'] === 'trial') $planLabel .= ' TRIAL';
+                ?>
+                <span style="font-size:.58rem;font-weight:700;color:#fff;background:<?= $planBadgeColor ?>;padding:1px 5px;border-radius:4px;letter-spacing:.3px;">
+                    <?= htmlspecialchars($planLabel, ENT_QUOTES, 'UTF-8') ?>
                 </span>
             </div>
         </div>

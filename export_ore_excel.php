@@ -1,11 +1,13 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
 $mese = intval($_GET['mese'] ?? date('n'));
 $anno = intval($_GET['anno'] ?? date('Y'));
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 $primo_giorno = "$anno-" . str_pad($mese, 2, '0', STR_PAD_LEFT) . "-01";
 $ultimo_giorno = date("Y-m-t", strtotime($primo_giorno));
@@ -16,11 +18,11 @@ $stmt = $conn->prepare(
             CASE WHEN o.tipo_ore = 'gruppo' THEN (o.ore * p.tariffa_gruppo) ELSE (o.ore * p.paga_oraria) END AS importo
      FROM tb_ore_lavoro o
      JOIN tb_progetti p ON o.progetto_id = p.id_progetto
-     WHERE o.user_id = ? AND o.data_lavoro BETWEEN ? AND ?
+     WHERE o.tenant_id = ? AND o.user_id = ? AND o.data_lavoro BETWEEN ? AND ?
      ORDER BY o.data_lavoro, p.nome_progetto"
 );
 $user_id = (int)$_SESSION['user_id'];
-$stmt->bind_param('iss', $user_id, $primo_giorno, $ultimo_giorno);
+$stmt->bind_param('iiss', $tenant_id, $user_id, $primo_giorno, $ultimo_giorno);
 $stmt->execute();
 $result = $stmt->get_result();
 

@@ -1,8 +1,10 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 $mese_num = intval($_GET['mese'] ?? 0);
 $anno = intval($_GET['anno'] ?? date('Y'));
@@ -23,34 +25,46 @@ $primo_giorno = "$anno-" . str_pad($mese_num, 2, '0', STR_PAD_LEFT) . "-01";
 $ultimo_giorno = date("Y-m-t", strtotime($primo_giorno));
 
 // Recupera lista clienti per il filtro
-$query_clienti = "SELECT id_cliente, denominazione FROM tb_clienti ORDER BY denominazione";
-$result_clienti = mysqli_query($conn, $query_clienti);
+$_stm_cl2 = mysqli_prepare($conn, 'SELECT id_cliente, denominazione FROM tb_clienti WHERE tenant_id = ? ORDER BY denominazione');
+mysqli_stmt_bind_param($_stm_cl2, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_cl2);
+$result_clienti = mysqli_stmt_get_result($_stm_cl2);
 
-// Costruisci la query con eventuale filtro cliente
-$sql_where_cliente = "";
+// Query principale ore con filtro cliente opzionale
+$uid = (int)$_SESSION['user_id'];
 if ($filtro_cliente > 0) {
-    $sql_where_cliente = " AND p.id_cliente = $filtro_cliente ";
+    $stm_r = mysqli_prepare($conn,
+        "SELECT p.id_progetto, p.nome_progetto, p.paga_oraria, p.tariffa_gruppo,
+                c.denominazione as nome_cliente,
+                SUM(CASE WHEN o.tipo_ore = 'singolo' THEN o.ore ELSE 0 END) as ore_singolo,
+                SUM(CASE WHEN o.tipo_ore = 'gruppo'  THEN o.ore ELSE 0 END) as ore_gruppo,
+                SUM(o.ore) as totale_ore,
+                SUM(CASE WHEN o.tipo_ore = 'gruppo' THEN o.ore * p.tariffa_gruppo ELSE o.ore * p.paga_oraria END) as totale_lordo
+         FROM tb_ore_lavoro o
+         JOIN tb_progetti p ON o.progetto_id = p.id_progetto
+         LEFT JOIN tb_clienti c ON p.id_cliente = c.id_cliente
+         WHERE o.tenant_id = ? AND o.user_id = ? AND o.data_lavoro BETWEEN ? AND ? AND p.id_cliente = ?
+         GROUP BY p.id_progetto, p.nome_progetto, p.paga_oraria, p.tariffa_gruppo, c.denominazione
+         ORDER BY c.denominazione, p.nome_progetto");
+    mysqli_stmt_bind_param($stm_r, 'iissi', $tenant_id, $uid, $primo_giorno, $ultimo_giorno, $filtro_cliente);
+} else {
+    $stm_r = mysqli_prepare($conn,
+        "SELECT p.id_progetto, p.nome_progetto, p.paga_oraria, p.tariffa_gruppo,
+                c.denominazione as nome_cliente,
+                SUM(CASE WHEN o.tipo_ore = 'singolo' THEN o.ore ELSE 0 END) as ore_singolo,
+                SUM(CASE WHEN o.tipo_ore = 'gruppo'  THEN o.ore ELSE 0 END) as ore_gruppo,
+                SUM(o.ore) as totale_ore,
+                SUM(CASE WHEN o.tipo_ore = 'gruppo' THEN o.ore * p.tariffa_gruppo ELSE o.ore * p.paga_oraria END) as totale_lordo
+         FROM tb_ore_lavoro o
+         JOIN tb_progetti p ON o.progetto_id = p.id_progetto
+         LEFT JOIN tb_clienti c ON p.id_cliente = c.id_cliente
+         WHERE o.tenant_id = ? AND o.user_id = ? AND o.data_lavoro BETWEEN ? AND ?
+         GROUP BY p.id_progetto, p.nome_progetto, p.paga_oraria, p.tariffa_gruppo, c.denominazione
+         ORDER BY c.denominazione, p.nome_progetto");
+    mysqli_stmt_bind_param($stm_r, 'iiss', $tenant_id, $uid, $primo_giorno, $ultimo_giorno);
 }
-
-$query = "SELECT p.id_progetto, p.nome_progetto, p.paga_oraria, p.tariffa_gruppo,
-          c.denominazione as nome_cliente,
-          SUM(CASE WHEN o.tipo_ore = 'singolo' THEN o.ore ELSE 0 END) as ore_singolo,
-          SUM(CASE WHEN o.tipo_ore = 'gruppo' THEN o.ore ELSE 0 END) as ore_gruppo,
-          SUM(o.ore) as totale_ore,
-          SUM(CASE 
-              WHEN o.tipo_ore = 'gruppo' THEN o.ore * p.tariffa_gruppo
-              ELSE o.ore * p.paga_oraria
-          END) as totale_lordo
-          FROM tb_ore_lavoro o
-          JOIN tb_progetti p ON o.progetto_id = p.id_progetto
-          LEFT JOIN tb_clienti c ON p.id_cliente = c.id_cliente
-          WHERE o.user_id = {$_SESSION['user_id']}
-          AND o.data_lavoro BETWEEN '$primo_giorno' AND '$ultimo_giorno'
-          $sql_where_cliente
-          GROUP BY p.id_progetto, p.nome_progetto, p.paga_oraria, p.tariffa_gruppo, c.denominazione
-          ORDER BY c.denominazione, p.nome_progetto";
-
-$result = mysqli_query($conn, $query);
+mysqli_stmt_execute($stm_r);
+$result = mysqli_stmt_get_result($stm_r);
 
 $totale_generale_ore = 0;
 $totale_generale_lordo = 0;

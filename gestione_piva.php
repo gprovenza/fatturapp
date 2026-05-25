@@ -1,12 +1,14 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
 if (!in_array($_SESSION['ruolo'] ?? '', ['admin', 'user'], true)) {
     header('Location: index.php'); exit;
 }
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_verify();
@@ -26,10 +28,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'insert') {
         $stmt = mysqli_prepare($conn,
-            'INSERT INTO tb_anagrafiche (denominazione, nome, cognome, indirizzo, citta, provincia, cap, partita_iva, codice_fiscale, PR, tasse_percentuale)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        mysqli_stmt_bind_param($stmt, 'ssssssssssd',
-            $denominazione, $nome, $cognome, $indirizzo, $citta, $provincia, $cap, $partita_iva, $codice_fiscale, $PR, $tasse_pct);
+            'INSERT INTO tb_anagrafiche (denominazione, nome, cognome, indirizzo, citta, provincia, cap, partita_iva, codice_fiscale, PR, tasse_percentuale, tenant_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        mysqli_stmt_bind_param($stmt, 'ssssssssssdi',
+            $denominazione, $nome, $cognome, $indirizzo, $citta, $provincia, $cap, $partita_iva, $codice_fiscale, $PR, $tasse_pct, $tenant_id);
         mysqli_stmt_execute($stmt) ? set_flash('Nuova P.IVA inserita con successo!', 'success') : set_flash('Errore durante l\'inserimento.', 'danger');
         mysqli_stmt_close($stmt);
 
@@ -37,16 +39,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = intval($_POST['id_anagrafica']);
         $stmt = mysqli_prepare($conn,
             'UPDATE tb_anagrafiche SET denominazione=?, nome=?, cognome=?, indirizzo=?, citta=?, provincia=?, cap=?, partita_iva=?, codice_fiscale=?, PR=?, tasse_percentuale=?
-             WHERE id_anagrafica=?');
-        mysqli_stmt_bind_param($stmt, 'ssssssssssdi',
-            $denominazione, $nome, $cognome, $indirizzo, $citta, $provincia, $cap, $partita_iva, $codice_fiscale, $PR, $tasse_pct, $id);
+             WHERE id_anagrafica=? AND tenant_id=?');
+        mysqli_stmt_bind_param($stmt, 'ssssssssssdii',
+            $denominazione, $nome, $cognome, $indirizzo, $citta, $provincia, $cap, $partita_iva, $codice_fiscale, $PR, $tasse_pct, $id, $tenant_id);
         mysqli_stmt_execute($stmt) ? set_flash('Dati aggiornati con successo!', 'success') : set_flash('Errore durante l\'aggiornamento.', 'danger');
         mysqli_stmt_close($stmt);
 
     } elseif ($action === 'delete') {
         $id = intval($_POST['id_anagrafica']);
-        $stmt_chk = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_fatture WHERE anagrafica_id = ?');
-        mysqli_stmt_bind_param($stmt_chk, 'i', $id);
+        $stmt_chk = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_fatture WHERE anagrafica_id = ? AND tenant_id = ?');
+        mysqli_stmt_bind_param($stmt_chk, 'ii', $id, $tenant_id);
         mysqli_stmt_execute($stmt_chk);
         $n = intval(mysqli_stmt_get_result($stmt_chk)->fetch_row()[0]);
         mysqli_stmt_close($stmt_chk);
@@ -54,8 +56,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($n > 0) {
             set_flash("Impossibile eliminare: $n fatture collegate a questa P.IVA.", 'danger');
         } else {
-            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_anagrafiche WHERE id_anagrafica = ?');
-            mysqli_stmt_bind_param($stmt, 'i', $id);
+            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_anagrafiche WHERE id_anagrafica = ? AND tenant_id = ?');
+            mysqli_stmt_bind_param($stmt, 'ii', $id, $tenant_id);
             mysqli_stmt_execute($stmt) ? set_flash('Anagrafica eliminata.', 'success') : set_flash('Errore eliminazione.', 'danger');
             mysqli_stmt_close($stmt);
         }
@@ -65,7 +67,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$anagrafiche = mysqli_fetch_all(mysqli_query($conn, 'SELECT * FROM tb_anagrafiche ORDER BY denominazione'), MYSQLI_ASSOC);
+$_stm_an = mysqli_prepare($conn, 'SELECT * FROM tb_anagrafiche WHERE tenant_id = ? ORDER BY denominazione');
+mysqli_stmt_bind_param($_stm_an, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_an);
+$anagrafiche = mysqli_fetch_all(mysqli_stmt_get_result($_stm_an), MYSQLI_ASSOC);
 mysqli_close($conn);
 
 $page_title  = 'Gestione P.IVA';

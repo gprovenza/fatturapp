@@ -1,6 +1,7 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
 // Solo admin e user possono generare fatture
 if (!in_array($_SESSION['ruolo'] ?? '', ['admin', 'user'], true)) {
@@ -14,10 +15,19 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 csrf_verify();
+requireActiveSub();
 
 require 'fpdf/fpdf.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
+
+// Verifica limite piano Free
+if (!canCreate('fattura', $conn)) {
+    set_flash('Hai raggiunto il limite di fatture mensili del piano Free. <a href="saas/billing.php">Passa a Pro →</a>', 'warning');
+    header('Location: genera_fattura_form.php');
+    exit;
+}
 
 // Recupero e validazione input
 $anagrafica_id  = intval($_POST['anagrafica_id'] ?? 0);
@@ -34,37 +44,43 @@ if (!$anagrafica_id || !$cliente_id || empty($mese) || !$anno || empty($progetti
 }
 
 // ======================================================================
-// CALCOLO PROGRESSIVO FATTURA (prepared statement)
+// CALCOLO PROGRESSIVO FATTURA (da saas_tenant_settings)
 // ======================================================================
-$pattern = 'DOC%-' . $anno;
-$stmt_num = mysqli_prepare($conn, 'SELECT numero_fattura FROM tb_fatture WHERE numero_fattura LIKE ?');
-mysqli_stmt_bind_param($stmt_num, 's', $pattern);
-mysqli_stmt_execute($stmt_num);
-$result_num = mysqli_stmt_get_result($stmt_num);
-
-$max_progressivo = 0;
-while ($row_num = mysqli_fetch_assoc($result_num)) {
-    if (preg_match('/DOC(\d+)-' . $anno . '/', $row_num['numero_fattura'], $m)) {
-        $num = intval($m[1]);
-        if ($num > $max_progressivo) $max_progressivo = $num;
-    }
+$stm_cfg = $conn->prepare(
+    "SELECT chiave, valore FROM saas_tenant_settings WHERE tenant_id = ? AND chiave IN ('prefisso_fattura','progressivo_fattura','anno_progressivo')"
+);
+$stm_cfg->bind_param('i', $tenant_id);
+$stm_cfg->execute();
+$cfg = [];
+foreach ($stm_cfg->get_result()->fetch_all(MYSQLI_ASSOC) as $r) {
+    $cfg[$r['chiave']] = $r['valore'];
 }
-mysqli_stmt_close($stmt_num);
+$stm_cfg->close();
 
-$nuovo_progressivo = $max_progressivo + 1;
-$numero_fattura    = 'DOC' . $nuovo_progressivo . '-' . $anno;
+$prefisso   = $cfg['prefisso_fattura']    ?? 'DOC';
+$progressivo = (int)($cfg['progressivo_fattura'] ?? 1);
+$anno_cfg   = (int)($cfg['anno_progressivo']    ?? date('Y'));
+
+// Reset progressivo se cambia l'anno
+if ($anno_cfg !== $anno) {
+    $progressivo = 1;
+    $anno_cfg    = $anno;
+}
+
+$numero_fattura    = $prefisso . $progressivo . '-' . $anno;
+$nuovo_progressivo = $progressivo + 1;
 
 // ======================================================================
 // RECUPERO ANAGRAFICA E CLIENTE (prepared statements)
 // ======================================================================
-$stmt_an = mysqli_prepare($conn, 'SELECT * FROM tb_anagrafiche WHERE id_anagrafica = ?');
-mysqli_stmt_bind_param($stmt_an, 'i', $anagrafica_id);
+$stmt_an = mysqli_prepare($conn, 'SELECT * FROM tb_anagrafiche WHERE id_anagrafica = ? AND tenant_id = ?');
+mysqli_stmt_bind_param($stmt_an, 'ii', $anagrafica_id, $tenant_id);
 mysqli_stmt_execute($stmt_an);
 $row_anagrafica = mysqli_stmt_get_result($stmt_an)->fetch_assoc();
 mysqli_stmt_close($stmt_an);
 
-$stmt_cl = mysqli_prepare($conn, 'SELECT * FROM tb_clienti WHERE id_cliente = ?');
-mysqli_stmt_bind_param($stmt_cl, 'i', $cliente_id);
+$stmt_cl = mysqli_prepare($conn, 'SELECT * FROM tb_clienti WHERE id_cliente = ? AND tenant_id = ?');
+mysqli_stmt_bind_param($stmt_cl, 'ii', $cliente_id, $tenant_id);
 mysqli_stmt_execute($stmt_cl);
 $row_cliente = mysqli_stmt_get_result($stmt_cl)->fetch_assoc();
 mysqli_stmt_close($stmt_cl);
@@ -85,7 +101,7 @@ function convertiTesto(string $testo): string {
 $totale_prestazioni_globale = 0.0;
 $dettagli_progetti = [];
 
-$stmt_prj = mysqli_prepare($conn, 'SELECT * FROM tb_progetti WHERE id_progetto = ?');
+$stmt_prj = mysqli_prepare($conn, 'SELECT * FROM tb_progetti WHERE id_progetto = ? AND tenant_id = ?');
 
 foreach ($progetti_id as $idx => $pid) {
     $pid = intval($pid);
@@ -93,7 +109,7 @@ foreach ($progetti_id as $idx => $pid) {
 
     if ($pid <= 0 || $ore <= 0) continue;
 
-    mysqli_stmt_bind_param($stmt_prj, 'i', $pid);
+    mysqli_stmt_bind_param($stmt_prj, 'ii', $pid, $tenant_id);
     mysqli_stmt_execute($stmt_prj);
     $row_prj = mysqli_stmt_get_result($stmt_prj)->fetch_assoc();
 
@@ -130,23 +146,40 @@ mysqli_begin_transaction($conn);
 
 try {
     $stmt_ins = mysqli_prepare($conn,
-        'INSERT INTO tb_fatture (numero_fattura, anagrafica_id, cliente_id, mese, anno, totale_prestazioni, marca_bollo, totale_fattura, data_creazione)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())');
-    mysqli_stmt_bind_param($stmt_ins, 'siisiddd',
+        'INSERT INTO tb_fatture (numero_fattura, anagrafica_id, cliente_id, mese, anno, totale_prestazioni, marca_bollo, totale_fattura, data_creazione, tenant_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)');
+    mysqli_stmt_bind_param($stmt_ins, 'siisidddi',
         $numero_fattura, $anagrafica_id, $cliente_id, $mese, $anno,
-        $totale_prestazioni_globale, $marca_da_bollo, $totale_fattura);
+        $totale_prestazioni_globale, $marca_da_bollo, $totale_fattura, $tenant_id);
     mysqli_stmt_execute($stmt_ins);
     $id_fattura_db = mysqli_insert_id($conn);
     mysqli_stmt_close($stmt_ins);
 
     $stmt_det = mysqli_prepare($conn,
-        'INSERT INTO tb_fatture_dettaglio (id_fattura, progetto_id, ore_erogate, costo_orario, subtotale) VALUES (?, ?, ?, ?, ?)');
+        'INSERT INTO tb_fatture_dettaglio (id_fattura, progetto_id, ore_erogate, costo_orario, subtotale, tenant_id) VALUES (?, ?, ?, ?, ?, ?)');
     foreach ($dettagli_progetti as $det) {
-        mysqli_stmt_bind_param($stmt_det, 'iiddd',
-            $id_fattura_db, $det['progetto_id'], $det['ore'], $det['costo_orario'], $det['subtotale']);
+        mysqli_stmt_bind_param($stmt_det, 'iidddi',
+            $id_fattura_db, $det['progetto_id'], $det['ore'], $det['costo_orario'], $det['subtotale'], $tenant_id);
         mysqli_stmt_execute($stmt_det);
     }
     mysqli_stmt_close($stmt_det);
+
+    // Aggiorna progressivo fattura in saas_tenant_settings
+    $stm_upd_prog = $conn->prepare(
+        "INSERT INTO saas_tenant_settings (tenant_id, chiave, valore) VALUES (?, 'progressivo_fattura', ?)
+         ON DUPLICATE KEY UPDATE valore = VALUES(valore)"
+    );
+    $nuovo_prog_str = (string)$nuovo_progressivo;
+    $stm_upd_prog->bind_param('is', $tenant_id, $nuovo_prog_str);
+    $stm_upd_prog->execute();
+
+    $stm_upd_anno = $conn->prepare(
+        "INSERT INTO saas_tenant_settings (tenant_id, chiave, valore) VALUES (?, 'anno_progressivo', ?)
+         ON DUPLICATE KEY UPDATE valore = VALUES(valore)"
+    );
+    $anno_str = (string)$anno_cfg;
+    $stm_upd_anno->bind_param('is', $tenant_id, $anno_str);
+    $stm_upd_anno->execute();
 
     mysqli_commit($conn);
 } catch (Exception $e) {

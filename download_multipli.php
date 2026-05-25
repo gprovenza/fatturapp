@@ -1,6 +1,7 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
 csrf_verify();
 
@@ -16,12 +17,17 @@ if (empty($fatture_ids)) {
     exit;
 }
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
-// Recupera i PDF
-$ids_string = implode(',', $fatture_ids);
-$query = "SELECT pdf_path, numero_fattura FROM tb_fatture WHERE id_fattura IN ($ids_string)";
-$result = mysqli_query($conn, $query);
+// Recupera i PDF (scoped al tenant, prepared statement)
+$placeholders = implode(',', array_fill(0, count($fatture_ids), '?'));
+$types        = str_repeat('i', count($fatture_ids)) . 'i'; // IDs + tenant_id
+$stmt_dl      = mysqli_prepare($conn, "SELECT pdf_path, numero_fattura FROM tb_fatture WHERE id_fattura IN ($placeholders) AND tenant_id = ?");
+$params       = array_merge($fatture_ids, [$tenant_id]);
+mysqli_stmt_bind_param($stmt_dl, $types, ...$params);
+mysqli_stmt_execute($stmt_dl);
+$result = mysqli_stmt_get_result($stmt_dl);
 
 $files = [];
 while ($row = mysqli_fetch_assoc($result)) {

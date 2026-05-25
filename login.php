@@ -32,33 +32,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!empty($username) && !empty($password)) {
             $conn = getDBConnection();
-            $stmt = mysqli_prepare($conn, 'SELECT id_utente, password_hash, ruolo FROM tb_utenti WHERE username = ?');
-            mysqli_stmt_bind_param($stmt, 's', $username);
+            // Supporta login via username (utenti legacy) O via email (utenti SaaS)
+            $stmt = mysqli_prepare($conn,
+                'SELECT u.id_utente, u.username, u.password_hash, u.ruolo,
+                        u.tenant_id, u.email, u.email_verified_at,
+                        t.status AS tenant_status,
+                        s.plan_id, s.status AS sub_status, s.trial_ends_at,
+                        p.name AS plan_name, p.max_fatture_mese, p.max_clienti
+                 FROM tb_utenti u
+                 LEFT JOIN saas_tenants t       ON t.id       = u.tenant_id
+                 LEFT JOIN saas_subscriptions s ON s.tenant_id = t.id
+                 LEFT JOIN saas_plans p         ON p.id       = s.plan_id
+                 WHERE u.username = ? OR u.email = ?
+                 LIMIT 1');
+            mysqli_stmt_bind_param($stmt, 'ss', $username, $username);
             mysqli_stmt_execute($stmt);
             $result = mysqli_stmt_get_result($stmt);
 
             if ($row = mysqli_fetch_assoc($result)) {
                 if (password_verify($password, $row['password_hash'])) {
-                    // Login corretto: rigenera session ID per prevenire fixation
-                    session_regenerate_id(true);
-                    $_SESSION['user_id']         = $row['id_utente'];
-                    $_SESSION['username']        = $username;
-                    $_SESSION['ruolo']           = $row['ruolo'];
-                    $_SESSION['last_activity']   = time();
-                    unset($_SESSION['login_attempts']);
+                    // Blocca accesso se email non verificata (solo utenti SaaS con tenant)
+                    if ($row['tenant_id'] && empty($row['email_verified_at'])) {
+                        $error = 'Devi verificare il tuo indirizzo email prima di accedere. Controlla la casella di posta.';
+                        $_SESSION['login_attempts']++;
+                        mysqli_stmt_close($stmt);
+                        mysqli_close($conn);
+                    } else {
+                        // Login corretto: rigenera session ID per prevenire fixation
+                        session_regenerate_id(true);
+                        $_SESSION['user_id']           = $row['id_utente'];
+                        $_SESSION['username']          = $row['username'];
+                        $_SESSION['ruolo']             = $row['ruolo'];
+                        $_SESSION['last_activity']     = time();
+                        // Dati tenant e piano
+                        $_SESSION['tenant_id']         = (int)$row['tenant_id'];
+                        $_SESSION['plan_id']           = (int)$row['plan_id'];
+                        $_SESSION['plan_name']         = $row['plan_name']         ?? 'free';
+                        $_SESSION['sub_status']        = $row['sub_status']        ?? 'expired';
+                        $_SESSION['trial_ends_at']     = $row['trial_ends_at'];
+                        $_SESSION['max_fatture_mese']  = $row['max_fatture_mese'];
+                        $_SESSION['max_clienti']       = $row['max_clienti'];
+                        $_SESSION['is_saas_admin']     = ((int)$row['tenant_id'] === 1 && $row['ruolo'] === 'admin');
+                        unset($_SESSION['login_attempts']);
+                        mysqli_stmt_close($stmt);
+                        mysqli_close($conn);
+                        header('Location: index.php');
+                        exit;
+                    }
+                } else {
+                    $_SESSION['login_attempts']++;
+                    $error = 'Credenziali non valide.';
                     mysqli_stmt_close($stmt);
                     mysqli_close($conn);
-                    header('Location: index.php');
-                    exit;
                 }
+            } else {
+                $_SESSION['login_attempts']++;
+                $error = 'Credenziali non valide.';
+                mysqli_stmt_close($stmt);
+                mysqli_close($conn);
             }
-
-            $_SESSION['login_attempts']++;
-            $error = 'Credenziali non valide.';
-            mysqli_stmt_close($stmt);
-            mysqli_close($conn);
         } else {
-            $error = 'Inserisci username e password.';
+            $error = 'Inserisci email/username e password.';
         }
     }
 }
@@ -105,6 +139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="input-group">
                     <span class="input-group-text"><i class="bi bi-person"></i></span>
                     <input type="text" name="username" class="form-control" required autofocus
+                           placeholder="email o username"
                            value="<?= htmlspecialchars($_POST['username'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
                 </div>
             </div>
@@ -122,6 +157,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <i class="bi bi-box-arrow-in-right me-1"></i> Accedi
             </button>
         </form>
+        <div class="text-center mt-3" style="font-size:.85rem;">
+            <a href="saas/forgot-password.php" class="text-decoration-none">Password dimenticata?</a>
+            &nbsp;·&nbsp;
+            <a href="saas/register.php" class="text-decoration-none fw-semibold">Registrati gratis →</a>
+        </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

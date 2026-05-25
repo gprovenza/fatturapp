@@ -1,8 +1,10 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 // Inserimento nuova registrazione ore
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'insert') {
@@ -14,8 +16,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'inser
     $note        = trim($_POST['note'] ?? '');
 
     if (!empty($data) && $progetto_id > 0 && $ore > 0) {
-        $stmt = mysqli_prepare($conn, 'INSERT INTO tb_ore_lavoro (data_lavoro, progetto_id, ore, note, user_id, tipo_ore) VALUES (?, ?, ?, ?, ?, \'singolo\')');
-        mysqli_stmt_bind_param($stmt, 'sidsi', $data, $progetto_id, $ore, $note, $_SESSION['user_id']);
+        requireActiveSub();
+        $stmt = mysqli_prepare($conn, 'INSERT INTO tb_ore_lavoro (data_lavoro, progetto_id, ore, note, user_id, tipo_ore, tenant_id) VALUES (?, ?, ?, ?, ?, \'singolo\', ?)');
+        mysqli_stmt_bind_param($stmt, 'sidsii', $data, $progetto_id, $ore, $note, $_SESSION['user_id'], $tenant_id);
         if (mysqli_stmt_execute($stmt)) {
             set_flash('Ore registrate con successo!', 'success');
         } else {
@@ -36,8 +39,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
     csrf_verify();
 
     $id   = intval($_POST['id_ore'] ?? 0);
-    $stmt = mysqli_prepare($conn, 'DELETE FROM tb_ore_lavoro WHERE id_ore = ? AND user_id = ?');
-    mysqli_stmt_bind_param($stmt, 'ii', $id, $_SESSION['user_id']);
+    $stmt = mysqli_prepare($conn, 'DELETE FROM tb_ore_lavoro WHERE id_ore = ? AND user_id = ? AND tenant_id = ?');
+    mysqli_stmt_bind_param($stmt, 'iii', $id, $_SESSION['user_id'], $tenant_id);
     mysqli_stmt_execute($stmt);
     mysqli_stmt_close($stmt);
     set_flash('Registrazione eliminata.', 'success');
@@ -51,8 +54,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
 $query_progetti = 'SELECT p.id_progetto, p.nome_progetto, c.denominazione AS cliente_nome
                    FROM tb_progetti p
                    JOIN tb_clienti c ON p.id_cliente = c.id_cliente
+                   WHERE p.tenant_id = ?
                    ORDER BY c.denominazione, p.nome_progetto';
-$result_progetti = mysqli_query($conn, $query_progetti);
+$_stm_prj = mysqli_prepare($conn, $query_progetti);
+mysqli_stmt_bind_param($_stm_prj, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_prj);
+$result_progetti = mysqli_stmt_get_result($_stm_prj);
 $progetti_list   = mysqli_fetch_all($result_progetti, MYSQLI_ASSOC);
 
 // Filtri (tutti sanitizzati come interi / string)
@@ -62,7 +69,10 @@ $progetto_filtro = intval($_GET['progetto'] ?? 0);
 
 // Percentuale tasse (da DB o costante)
 $tasse_percentuale = TAX_PERCENTAGE;
-$res_tasse = mysqli_query($conn, 'SELECT tasse_percentuale FROM tb_anagrafiche LIMIT 1');
+$_stm_tx = mysqli_prepare($conn, 'SELECT tasse_percentuale FROM tb_anagrafiche WHERE tenant_id = ? LIMIT 1');
+mysqli_stmt_bind_param($_stm_tx, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_tx);
+$res_tasse = mysqli_stmt_get_result($_stm_tx);
 if ($row_tasse = mysqli_fetch_assoc($res_tasse)) {
     $tasse_percentuale = floatval($row_tasse['tasse_percentuale']);
 }
@@ -73,15 +83,15 @@ if ($progetto_filtro > 0) {
         'SELECT SUM(o.ore) AS tot_ore, SUM(o.ore * p.paga_oraria) AS tot_guadagno
          FROM tb_ore_lavoro o
          JOIN tb_progetti p ON o.progetto_id = p.id_progetto
-         WHERE MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.progetto_id = ?');
-    mysqli_stmt_bind_param($stmt_tot, 'iii', $mese_filtro, $anno_filtro, $progetto_filtro);
+         WHERE o.tenant_id = ? AND MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.progetto_id = ?');
+    mysqli_stmt_bind_param($stmt_tot, 'iiii', $tenant_id, $mese_filtro, $anno_filtro, $progetto_filtro);
 } else {
     $stmt_tot = mysqli_prepare($conn,
         'SELECT SUM(o.ore) AS tot_ore, SUM(o.ore * p.paga_oraria) AS tot_guadagno
          FROM tb_ore_lavoro o
          JOIN tb_progetti p ON o.progetto_id = p.id_progetto
-         WHERE MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ?');
-    mysqli_stmt_bind_param($stmt_tot, 'ii', $mese_filtro, $anno_filtro);
+         WHERE o.tenant_id = ? AND MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ?');
+    mysqli_stmt_bind_param($stmt_tot, 'iii', $tenant_id, $mese_filtro, $anno_filtro);
 }
 mysqli_stmt_execute($stmt_tot);
 $row_totali = mysqli_stmt_get_result($stmt_tot)->fetch_assoc();
@@ -99,12 +109,12 @@ $offset = ($page - 1) * $records_per_page;
 // Conta totale record
 if ($progetto_filtro > 0) {
     $stmt_cnt = mysqli_prepare($conn,
-        'SELECT COUNT(*) AS totale FROM tb_ore_lavoro o WHERE MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.progetto_id = ?');
-    mysqli_stmt_bind_param($stmt_cnt, 'iii', $mese_filtro, $anno_filtro, $progetto_filtro);
+        'SELECT COUNT(*) AS totale FROM tb_ore_lavoro o WHERE o.tenant_id = ? AND MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.progetto_id = ?');
+    mysqli_stmt_bind_param($stmt_cnt, 'iiii', $tenant_id, $mese_filtro, $anno_filtro, $progetto_filtro);
 } else {
     $stmt_cnt = mysqli_prepare($conn,
-        'SELECT COUNT(*) AS totale FROM tb_ore_lavoro o WHERE MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ?');
-    mysqli_stmt_bind_param($stmt_cnt, 'ii', $mese_filtro, $anno_filtro);
+        'SELECT COUNT(*) AS totale FROM tb_ore_lavoro o WHERE o.tenant_id = ? AND MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ?');
+    mysqli_stmt_bind_param($stmt_cnt, 'iii', $tenant_id, $mese_filtro, $anno_filtro);
 }
 mysqli_stmt_execute($stmt_cnt);
 $total_records = intval(mysqli_stmt_get_result($stmt_cnt)->fetch_assoc()['totale']);
@@ -118,20 +128,20 @@ if ($progetto_filtro > 0) {
          FROM tb_ore_lavoro o
          JOIN tb_progetti p ON o.progetto_id = p.id_progetto
          JOIN tb_clienti c ON p.id_cliente = c.id_cliente
-         WHERE MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.progetto_id = ?
+         WHERE o.tenant_id = ? AND MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.progetto_id = ?
          ORDER BY o.data_lavoro DESC, o.id_ore DESC
          LIMIT ? OFFSET ?');
-    mysqli_stmt_bind_param($stmt_ore, 'iiiii', $mese_filtro, $anno_filtro, $progetto_filtro, $records_per_page, $offset);
+    mysqli_stmt_bind_param($stmt_ore, 'iiiiii', $tenant_id, $mese_filtro, $anno_filtro, $progetto_filtro, $records_per_page, $offset);
 } else {
     $stmt_ore = mysqli_prepare($conn,
         'SELECT o.*, p.nome_progetto, p.paga_oraria, c.denominazione AS cliente_nome
          FROM tb_ore_lavoro o
          JOIN tb_progetti p ON o.progetto_id = p.id_progetto
          JOIN tb_clienti c ON p.id_cliente = c.id_cliente
-         WHERE MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ?
+         WHERE o.tenant_id = ? AND MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ?
          ORDER BY o.data_lavoro DESC, o.id_ore DESC
          LIMIT ? OFFSET ?');
-    mysqli_stmt_bind_param($stmt_ore, 'iiii', $mese_filtro, $anno_filtro, $records_per_page, $offset);
+    mysqli_stmt_bind_param($stmt_ore, 'iiiii', $tenant_id, $mese_filtro, $anno_filtro, $records_per_page, $offset);
 }
 mysqli_stmt_execute($stmt_ore);
 $result_ore = mysqli_stmt_get_result($stmt_ore);

@@ -1,133 +1,117 @@
 <?php
 require_once 'auth_admin.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
-$message = '';
+$message      = '';
 $message_type = '';
 
-if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $prefisso = mysqli_real_escape_string($conn, $_POST['prefisso_fattura']);
-    $progressivo = intval($_POST['progressivo_fattura']);
-    
-    // Aggiorna prefisso
-    $stmt = mysqli_prepare($conn, "UPDATE tb_impostazioni SET valore = ? WHERE chiave = 'prefisso_fattura'");
-    mysqli_stmt_bind_param($stmt, "s", $prefisso);
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_close($stmt);
-    
-    // Aggiorna progressivo
-    $stmt = mysqli_prepare($conn, "UPDATE tb_impostazioni SET valore = ? WHERE chiave = 'progressivo_fattura'");
-    mysqli_stmt_bind_param($stmt, "i", $progressivo);
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_close($stmt);
-    
-    $message = "Impostazioni salvate con successo!";
-    $message_type = "success";
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    csrf_verify();
+    $prefisso    = trim($_POST['prefisso_fattura']    ?? '');
+    $progressivo = max(1, intval($_POST['progressivo_fattura'] ?? 1));
+
+    if (!preg_match('/^[A-Za-z0-9\-_]{1,10}$/', $prefisso)) {
+        $message      = 'Prefisso non valido (max 10 caratteri alfanumerici).';
+        $message_type = 'danger';
+    } else {
+        // Salva su saas_tenant_settings (fonte autoritativa)
+        $upsert = $conn->prepare(
+            "INSERT INTO saas_tenant_settings (tenant_id, chiave, valore) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE valore = VALUES(valore)"
+        );
+        foreach (['prefisso_fattura' => $prefisso, 'progressivo_fattura' => (string)$progressivo] as $k => $v) {
+            $upsert->bind_param('iss', $tenant_id, $k, $v);
+            $upsert->execute();
+        }
+        $upsert->close();
+
+        // Mantiene anche tb_impostazioni sincronizzata (solo tenant 1 legacy)
+        if ($tenant_id === 1) {
+            foreach (['prefisso_fattura' => $prefisso, 'progressivo_fattura' => (string)$progressivo] as $k => $v) {
+                $s = $conn->prepare("UPDATE tb_impostazioni SET valore = ? WHERE chiave = ?");
+                $s->bind_param('ss', $v, $k);
+                $s->execute();
+                $s->close();
+            }
+        }
+
+        $message      = 'Impostazioni salvate con successo!';
+        $message_type = 'success';
+    }
 }
 
-// Recupera impostazioni correnti
-$query = "SELECT chiave, valore FROM tb_impostazioni";
-$result = mysqli_query($conn, $query);
+// Recupera impostazioni correnti da saas_tenant_settings
+$stm = $conn->prepare("SELECT chiave, valore FROM saas_tenant_settings WHERE tenant_id = ?");
+$stm->bind_param('i', $tenant_id);
+$stm->execute();
 $impostazioni = [];
-while ($row = mysqli_fetch_assoc($result)) {
-    $impostazioni[$row['chiave']] = $row['valore'];
+foreach ($stm->get_result()->fetch_all(MYSQLI_ASSOC) as $r) {
+    $impostazioni[$r['chiave']] = $r['valore'];
 }
+$stm->close();
 
 mysqli_close($conn);
+
+$page_title   = 'Impostazioni';
+$current_page = 'impostazioni.php';
+require_once 'includes/header.php';
+require_once 'includes/sidebar.php';
 ?>
+<div class="content-wrapper">
+<div class="container-fluid py-4">
+  <div class="row justify-content-center">
+    <div class="col-lg-6">
+      <h2 class="fw-bold mb-4"><i class="bi bi-gear me-2 text-primary"></i>Impostazioni</h2>
 
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Impostazioni Sistema</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-</head>
-<body>
-    <nav class="navbar navbar-dark bg-primary">
-        <div class="container-fluid">
-            <a class="navbar-brand" href="index.php">← Torna alla Home</a>
-            <span class="text-white">
-                Benvenuto, <?= htmlspecialchars($_SESSION['username']) ?> <span class="badge bg-danger">ADMIN</span>
-                <a href="logout.php" class="btn btn-sm btn-light ms-3">Logout</a>
-            </span>
+      <?php if ($message): ?>
+        <div class="alert alert-<?= $message_type ?> alert-dismissible fade show">
+          <?= htmlspecialchars($message, ENT_QUOTES, 'UTF-8') ?>
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
-    </nav>
+      <?php endif; ?>
 
-    <div class="container mt-5">
-        <div class="row justify-content-center">
-            <div class="col-md-8">
-                <div class="card">
-                    <div class="card-header bg-primary text-white">
-                        <h4 class="mb-0"><i class="bi bi-gear"></i> Impostazioni Sistema</h4>
-                    </div>
-                    <div class="card-body">
-                        <?php if ($message): ?>
-                            <div class="alert alert-<?= $message_type ?> alert-dismissible fade show">
-                                <?= htmlspecialchars($message) ?>
-                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                            </div>
-                        <?php endif; ?>
-
-                        <form method="POST">
-                            <h5 class="mb-3">Numerazione Fatture</h5>
-                            
-                            <div class="mb-3">
-                                <label class="form-label">Prefisso Fattura</label>
-                                <input type="text" name="prefisso_fattura" class="form-control" 
-                                       value="<?= htmlspecialchars($impostazioni['prefisso_fattura']) ?>" 
-                                       required maxlength="10">
-                                <small class="form-text text-muted">
-                                    Es: DOC, FATTURA, INV, ecc.
-                                </small>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label class="form-label">Numero Progressivo Attuale</label>
-                                <input type="number" name="progressivo_fattura" class="form-control" 
-                                       value="<?= htmlspecialchars($impostazioni['progressivo_fattura']) ?>" 
-                                       required min="0">
-                                <small class="form-text text-muted">
-                                    La prossima fattura sarà: <strong><?= htmlspecialchars($impostazioni['prefisso_fattura']) ?><?= intval($impostazioni['progressivo_fattura']) + 1 ?>-<?= date('Y') ?></strong>
-                                </small>
-                            </div>
-                            
-                            <div class="alert alert-warning">
-                                <i class="bi bi-exclamation-triangle"></i> 
-                                <strong>Attenzione:</strong> Modificare il progressivo potrebbe creare duplicati. 
-                                Usa solo se sai cosa stai facendo.
-                            </div>
-                            
-                            <hr>
-                            
-                            <h5 class="mb-3">Informazioni Anno Corrente</h5>
-                            <div class="mb-3">
-                                <label class="form-label">Anno Progressivo</label>
-                                <input type="text" class="form-control" 
-                                       value="<?= htmlspecialchars($impostazioni['anno_progressivo']) ?>" 
-                                       disabled readonly>
-                                <small class="form-text text-muted">
-                                    Il progressivo si resetta automaticamente ogni anno
-                                </small>
-                            </div>
-                            
-                            <div class="d-grid gap-2">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="bi bi-save"></i> Salva Impostazioni
-                                </button>
-                                <a href="index.php" class="btn btn-secondary">Annulla</a>
-                            </div>
-                        </form>
-                    </div>
-                </div>
+      <div class="card border-0 shadow-sm">
+        <div class="card-header fw-semibold">Numerazione Fatture</div>
+        <div class="card-body">
+          <form method="POST">
+            <?= csrf_field() ?>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Prefisso</label>
+              <input type="text" name="prefisso_fattura" class="form-control" required maxlength="10"
+                     value="<?= htmlspecialchars($impostazioni['prefisso_fattura'] ?? 'DOC', ENT_QUOTES, 'UTF-8') ?>">
+              <div class="form-text">Es. DOC, FATTURA, INV (max 10 caratteri)</div>
             </div>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Prossimo progressivo</label>
+              <input type="number" name="progressivo_fattura" class="form-control" required min="1"
+                     value="<?= (int)($impostazioni['progressivo_fattura'] ?? 1) ?>">
+              <div class="form-text">
+                La prossima fattura sarà:
+                <strong><?= htmlspecialchars(($impostazioni['prefisso_fattura'] ?? 'DOC') . ($impostazioni['progressivo_fattura'] ?? '1') . '-' . date('Y'), ENT_QUOTES, 'UTF-8') ?></strong>
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Anno progressivo</label>
+              <input type="text" class="form-control" disabled
+                     value="<?= htmlspecialchars($impostazioni['anno_progressivo'] ?? date('Y'), ENT_QUOTES, 'UTF-8') ?>">
+              <div class="form-text">Si resetta automaticamente ogni anno.</div>
+            </div>
+            <div class="alert alert-warning small">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              Modificare il progressivo potrebbe creare duplicati. Usa solo se sai cosa stai facendo.
+            </div>
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-save me-1"></i> Salva
+            </button>
+          </form>
         </div>
+      </div>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+  </div>
+</div>
+</div>
+<?php require_once 'includes/footer.php'; ?>

@@ -1,26 +1,40 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
+requireActiveSub();
 
 // Carica dati per i select
-$progetti = mysqli_fetch_all(mysqli_query($conn,
+$_stm_prj = mysqli_prepare($conn,
     'SELECT p.id_progetto, p.nome_progetto, c.denominazione AS cliente_nome
      FROM tb_progetti p
      JOIN tb_clienti c ON p.id_cliente = c.id_cliente
-     ORDER BY c.denominazione, p.nome_progetto'), MYSQLI_ASSOC);
-$clienti = mysqli_fetch_all(mysqli_query($conn, 'SELECT id_cliente, denominazione FROM tb_clienti ORDER BY denominazione'), MYSQLI_ASSOC);
+     WHERE p.tenant_id = ?
+     ORDER BY c.denominazione, p.nome_progetto');
+mysqli_stmt_bind_param($_stm_prj, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_prj);
+$progetti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_prj), MYSQLI_ASSOC);
+
+$_stm_cli = mysqli_prepare($conn, 'SELECT id_cliente, denominazione FROM tb_clienti WHERE tenant_id = ? ORDER BY denominazione');
+mysqli_stmt_bind_param($_stm_cli, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_cli);
+$clienti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_cli), MYSQLI_ASSOC);
 
 // Pro-forme senza fattura elettronica collegata (massimo 3 mesi di anzianità)
-$proforma_libere = mysqli_fetch_all(mysqli_query($conn,
+$_stm_pfl = mysqli_prepare($conn,
     'SELECT f.id_fattura, f.numero_fattura, f.mese, f.anno, f.totale_fattura, f.cliente_id, c.denominazione AS cliente_nome
      FROM tb_fatture f
      JOIN tb_clienti c ON f.cliente_id = c.id_cliente
      LEFT JOIN tb_fatture_elettroniche fe ON fe.numero_proforma = f.id_fattura
-     WHERE fe.id_fattura_elettronica IS NULL
+     WHERE f.tenant_id = ? AND fe.id_fattura_elettronica IS NULL
        AND f.data_creazione >= DATE_SUB(NOW(), INTERVAL 3 MONTH)
-     ORDER BY f.anno DESC, f.data_creazione DESC'), MYSQLI_ASSOC);
+     ORDER BY f.anno DESC, f.data_creazione DESC');
+mysqli_stmt_bind_param($_stm_pfl, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_pfl);
+$proforma_libere = mysqli_fetch_all(mysqli_stmt_get_result($_stm_pfl), MYSQLI_ASSOC);
 
 // ============================================================
 // GESTIONE UPLOAD
@@ -45,8 +59,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // Verifica duplicato (prepared statement)
-    $stmt_chk = mysqli_prepare($conn, 'SELECT id_fattura_elettronica FROM tb_fatture_elettroniche WHERE numero_fattura = ?');
-    mysqli_stmt_bind_param($stmt_chk, 's', $numero_fattura);
+    $stmt_chk = mysqli_prepare($conn, 'SELECT id_fattura_elettronica FROM tb_fatture_elettroniche WHERE numero_fattura = ? AND tenant_id = ?');
+    mysqli_stmt_bind_param($stmt_chk, 'si', $numero_fattura, $tenant_id);
     mysqli_stmt_execute($stmt_chk);
     $dup = mysqli_stmt_get_result($stmt_chk)->fetch_assoc();
     mysqli_stmt_close($stmt_chk);
@@ -131,15 +145,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($proforma_collegata_id > 0) {
         // Selezione diretta dal dropdown (link affidabile per ID)
-        $stmt_pf = mysqli_prepare($conn, 'SELECT id_fattura, totale_fattura FROM tb_fatture WHERE id_fattura = ?');
-        mysqli_stmt_bind_param($stmt_pf, 'i', $proforma_collegata_id);
+        $stmt_pf = mysqli_prepare($conn, 'SELECT id_fattura, totale_fattura FROM tb_fatture WHERE id_fattura = ? AND tenant_id = ?');
+        mysqli_stmt_bind_param($stmt_pf, 'ii', $proforma_collegata_id, $tenant_id);
         mysqli_stmt_execute($stmt_pf);
         $row_proforma = mysqli_stmt_get_result($stmt_pf)->fetch_assoc();
         mysqli_stmt_close($stmt_pf);
     } else {
         // Fallback: cerca per corrispondenza numero fattura
-        $stmt_pf = mysqli_prepare($conn, 'SELECT id_fattura, totale_fattura FROM tb_fatture WHERE numero_fattura = ?');
-        mysqli_stmt_bind_param($stmt_pf, 's', $numero_fattura);
+        $stmt_pf = mysqli_prepare($conn, 'SELECT id_fattura, totale_fattura FROM tb_fatture WHERE numero_fattura = ? AND tenant_id = ?');
+        mysqli_stmt_bind_param($stmt_pf, 'si', $numero_fattura, $tenant_id);
         mysqli_stmt_execute($stmt_pf);
         $row_proforma = mysqli_stmt_get_result($stmt_pf)->fetch_assoc();
         mysqli_stmt_close($stmt_pf);
@@ -152,10 +166,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- Inserisci fattura elettronica ----
     $stmt_ins = mysqli_prepare($conn,
-        'INSERT INTO tb_fatture_elettroniche (numero_fattura, numero_proforma, pdf_filename, pdf_path, xml_filename, xml_path, uploaded_by, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    mysqli_stmt_bind_param($stmt_ins, 'sissssss',
-        $numero_fattura, $numero_proforma, $pdf_filename, $pdf_path_rel,
+        'INSERT INTO tb_fatture_elettroniche (tenant_id, numero_fattura, numero_proforma, pdf_filename, pdf_path, xml_filename, xml_path, uploaded_by, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    mysqli_stmt_bind_param($stmt_ins, 'isissssss',
+        $tenant_id, $numero_fattura, $numero_proforma, $pdf_filename, $pdf_path_rel,
         $xml_filename, $xml_path_rel, $_SESSION['user_id'], $note);
 
     if (!mysqli_stmt_execute($stmt_ins)) {
@@ -184,7 +198,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } else {
         // Crea record di tracciamento in tb_fatture (path senza proforma)
-        $stmt_ana = mysqli_prepare($conn, 'SELECT id_anagrafica FROM tb_anagrafiche LIMIT 1');
+        $stmt_ana = mysqli_prepare($conn, 'SELECT id_anagrafica FROM tb_anagrafiche WHERE tenant_id = ? LIMIT 1');
+        mysqli_stmt_bind_param($stmt_ana, 'i', $tenant_id);
         mysqli_stmt_execute($stmt_ana);
         $row_ana       = mysqli_stmt_get_result($stmt_ana)->fetch_assoc();
         $anagrafica_id = $row_ana['id_anagrafica'] ?? 1;
@@ -196,10 +211,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         mysqli_begin_transaction($conn);
         try {
             $stmt_fatt = mysqli_prepare($conn,
-                'INSERT INTO tb_fatture (numero_fattura, anagrafica_id, cliente_id, mese, anno, totale_prestazioni, marca_bollo, totale_fattura, data_creazione, pdf_path)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NULL)');
-            mysqli_stmt_bind_param($stmt_fatt, 'siisiddd',
-                $numero_fattura, $anagrafica_id, $cliente_id, $mese_form, $anno_form,
+                'INSERT INTO tb_fatture (tenant_id, numero_fattura, anagrafica_id, cliente_id, mese, anno, totale_prestazioni, marca_bollo, totale_fattura, data_creazione, pdf_path)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NULL)');
+            mysqli_stmt_bind_param($stmt_fatt, 'isiisiddd',
+                $tenant_id, $numero_fattura, $anagrafica_id, $cliente_id, $mese_form, $anno_form,
                 $tot_prest, $marca_bollo, $totale_lordo);
             if (!mysqli_stmt_execute($stmt_fatt)) {
                 throw new RuntimeException('Errore INSERT tb_fatture: ' . mysqli_error($conn));
@@ -209,20 +224,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // Inserisci dettagli progetti (opzionali)
             if (!empty($progetti_id) && $nuovo_id > 0) {
-                $stmt_prog_q = mysqli_prepare($conn, 'SELECT paga_oraria FROM tb_progetti WHERE id_progetto = ?');
+                $stmt_prog_q = mysqli_prepare($conn, 'SELECT paga_oraria FROM tb_progetti WHERE id_progetto = ? AND tenant_id = ?');
                 $stmt_det    = mysqli_prepare($conn,
-                    'INSERT INTO tb_fatture_dettaglio (id_fattura, progetto_id, ore_erogate, costo_orario, subtotale) VALUES (?, ?, ?, ?, ?)');
+                    'INSERT INTO tb_fatture_dettaglio (tenant_id, id_fattura, progetto_id, ore_erogate, costo_orario, subtotale) VALUES (?, ?, ?, ?, ?, ?)');
                 foreach ($progetti_id as $idx => $pid) {
                     $pid = intval($pid);
                     $ore = floatval($ore_erogate[$idx] ?? 0);
                     if ($pid <= 0 || $ore <= 0) continue;
-                    mysqli_stmt_bind_param($stmt_prog_q, 'i', $pid);
+                    mysqli_stmt_bind_param($stmt_prog_q, 'ii', $pid, $tenant_id);
                     mysqli_stmt_execute($stmt_prog_q);
                     $row_prog = mysqli_stmt_get_result($stmt_prog_q)->fetch_assoc();
                     if ($row_prog) {
                         $costo = floatval($row_prog['paga_oraria']);
                         $sub   = $ore * $costo;
-                        mysqli_stmt_bind_param($stmt_det, 'iiddd', $nuovo_id, $pid, $ore, $costo, $sub);
+                        mysqli_stmt_bind_param($stmt_det, 'iiiddd', $tenant_id, $nuovo_id, $pid, $ore, $costo, $sub);
                         mysqli_stmt_execute($stmt_det);
                     }
                 }
@@ -265,8 +280,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $archivio_page     = max(1, intval($_GET['archivio_page'] ?? 1));
 $archivio_per_page = 10;
 
-$cnt_arch         = mysqli_query($conn, 'SELECT COUNT(*) FROM tb_fatture_elettroniche');
-$archivio_total   = (int) mysqli_fetch_row($cnt_arch)[0];
+$_stm_cnt = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_fatture_elettroniche WHERE tenant_id = ?');
+mysqli_stmt_bind_param($_stm_cnt, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_cnt);
+$archivio_total   = (int) mysqli_fetch_row(mysqli_stmt_get_result($_stm_cnt))[0];
 $archivio_pages   = max(1, (int)ceil($archivio_total / $archivio_per_page));
 $archivio_page    = min($archivio_page, $archivio_pages);
 $archivio_offset  = ($archivio_page - 1) * $archivio_per_page;
@@ -276,9 +293,10 @@ $stmt_arch = mysqli_prepare($conn,
             CASE WHEN fe.numero_proforma IS NOT NULL THEN 1 ELSE 0 END AS ha_proforma
      FROM tb_fatture_elettroniche fe
      JOIN tb_utenti u ON fe.uploaded_by = u.id_utente
+     WHERE fe.tenant_id = ?
      ORDER BY fe.data_upload DESC
      LIMIT ? OFFSET ?');
-mysqli_stmt_bind_param($stmt_arch, 'ii', $archivio_per_page, $archivio_offset);
+mysqli_stmt_bind_param($stmt_arch, 'iii', $tenant_id, $archivio_per_page, $archivio_offset);
 mysqli_stmt_execute($stmt_arch);
 $archivio = mysqli_fetch_all(mysqli_stmt_get_result($stmt_arch), MYSQLI_ASSOC);
 mysqli_stmt_close($stmt_arch);

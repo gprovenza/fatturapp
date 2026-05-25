@@ -2,40 +2,46 @@
 require_once 'auth.php';
 require_once 'db.php';
 require_once 'includes/functions.php';
+require_once 'includes/tenant.php';
 
-$conn = getDBConnection();
-$ruolo = $_SESSION['ruolo'] ?? 'user';
+$conn          = getDBConnection();
+$ruolo         = $_SESSION['ruolo'] ?? 'user';
 $anno_corrente = (int)date('Y');
+$tenant_id     = getTenantId();
 
 // --- Statistiche rapide (prepared statements) ---
 
 // Totale fatture
-$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_fatture");
+$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_fatture WHERE tenant_id = ?");
+$stmt->bind_param('i', $tenant_id);
 $stmt->execute();
 $totale_fatture = (int)$stmt->get_result()->fetch_assoc()['totale'];
 $stmt->close();
 
 // Fatturato anno corrente
-$stmt = $conn->prepare("SELECT COALESCE(SUM(totale_fattura), 0) AS totale FROM tb_fatture WHERE anno = ?");
-$stmt->bind_param('i', $anno_corrente);
+$stmt = $conn->prepare("SELECT COALESCE(SUM(totale_fattura), 0) AS totale FROM tb_fatture WHERE tenant_id = ? AND anno = ?");
+$stmt->bind_param('ii', $tenant_id, $anno_corrente);
 $stmt->execute();
 $guadagno_anno = (float)$stmt->get_result()->fetch_assoc()['totale'];
 $stmt->close();
 
 // Fatture non pagate
-$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_fatture WHERE pagata = 0");
+$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_fatture WHERE tenant_id = ? AND pagata = 0");
+$stmt->bind_param('i', $tenant_id);
 $stmt->execute();
 $fatture_non_pagate = (int)$stmt->get_result()->fetch_assoc()['totale'];
 $stmt->close();
 
 // Totale clienti
-$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_clienti");
+$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_clienti WHERE tenant_id = ?");
+$stmt->bind_param('i', $tenant_id);
 $stmt->execute();
 $totale_clienti = (int)$stmt->get_result()->fetch_assoc()['totale'];
 $stmt->close();
 
 // Totale progetti
-$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_progetti");
+$stmt = $conn->prepare("SELECT COUNT(*) AS totale FROM tb_progetti WHERE tenant_id = ?");
+$stmt->bind_param('i', $tenant_id);
 $stmt->execute();
 $totale_progetti = (int)$stmt->get_result()->fetch_assoc()['totale'];
 $stmt->close();
@@ -45,9 +51,9 @@ $mese_corrente = (int)date('n');
 $stmt = $conn->prepare(
     "SELECT COALESCE(SUM(o.ore), 0) AS totale
      FROM tb_ore_lavoro o
-     WHERE MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.user_id = ?"
+     WHERE tenant_id = ? AND MONTH(o.data_lavoro) = ? AND YEAR(o.data_lavoro) = ? AND o.user_id = ?"
 );
-$stmt->bind_param('iii', $mese_corrente, $anno_corrente, $_SESSION['user_id']);
+$stmt->bind_param('iiii', $tenant_id, $mese_corrente, $anno_corrente, $_SESSION['user_id']);
 $stmt->execute();
 $ore_mese = (float)$stmt->get_result()->fetch_assoc()['totale'];
 $stmt->close();
@@ -58,9 +64,11 @@ $stmt = $conn->prepare(
             c.denominazione AS cliente
      FROM tb_fatture f
      JOIN tb_clienti c ON c.id_cliente = f.cliente_id
+     WHERE f.tenant_id = ?
      ORDER BY f.data_creazione DESC
      LIMIT 5"
 );
+$stmt->bind_param('i', $tenant_id);
 $stmt->execute();
 $ultime_fatture = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
@@ -69,8 +77,10 @@ $stmt->close();
 $stmt = $conn->prepare(
     "SELECT COALESCE(a.tasse_percentuale, 35) AS tasse
      FROM tb_anagrafiche a
+     WHERE tenant_id = ?
      LIMIT 1"
 );
+$stmt->bind_param('i', $tenant_id);
 $stmt->execute();
 $row_tasse = $stmt->get_result()->fetch_assoc();
 $tasse_pct = $row_tasse ? (float)$row_tasse['tasse'] : 35.0;

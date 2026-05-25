@@ -1,42 +1,49 @@
 <?php
 require_once 'auth.php';
 require_once 'db.php';
+require_once 'includes/tenant.php';
 
 if (!in_array($_SESSION['ruolo'] ?? '', ['admin', 'user'], true)) {
     header('Location: index.php'); exit;
 }
 
-$conn = getDBConnection();
+$conn      = getDBConnection();
+$tenant_id = getTenantId();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_verify();
     $action = $_POST['action'] ?? '';
 
     if ($action === 'add') {
+        if (!canCreate('cliente', $conn)) {
+            set_flash('Hai raggiunto il limite di clienti del piano Free. <a href="saas/billing.php">Passa a Pro →</a>', 'warning');
+            header('Location: gestione_clienti.php'); exit;
+        }
         $stmt = mysqli_prepare($conn,
-            'INSERT INTO tb_clienti (denominazione, indirizzo, cap, citta, provincia, partita_iva, codice_fiscale, SDI)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-        mysqli_stmt_bind_param($stmt, 'ssssssss',
+            'INSERT INTO tb_clienti (denominazione, indirizzo, cap, citta, provincia, partita_iva, codice_fiscale, SDI, tenant_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        mysqli_stmt_bind_param($stmt, 'ssssssssi',
             $_POST['denominazione'], $_POST['indirizzo'], $_POST['cap'],
             $_POST['citta'], $_POST['provincia'], $_POST['partita_iva'],
-            $_POST['codice_fiscale'], $_POST['SDI']);
+            $_POST['codice_fiscale'], $_POST['SDI'], $tenant_id);
         mysqli_stmt_execute($stmt) ? set_flash('Cliente aggiunto con successo!', 'success') : set_flash('Errore durante il salvataggio.', 'danger');
         mysqli_stmt_close($stmt);
 
     } elseif ($action === 'edit') {
         $stmt = mysqli_prepare($conn,
-            'UPDATE tb_clienti SET denominazione=?, indirizzo=?, cap=?, citta=?, provincia=?, partita_iva=?, codice_fiscale=?, SDI=? WHERE id_cliente=?');
-        mysqli_stmt_bind_param($stmt, 'ssssssssi',
+            'UPDATE tb_clienti SET denominazione=?, indirizzo=?, cap=?, citta=?, provincia=?, partita_iva=?, codice_fiscale=?, SDI=?
+             WHERE id_cliente=? AND tenant_id=?');
+        mysqli_stmt_bind_param($stmt, 'ssssssssii',
             $_POST['denominazione'], $_POST['indirizzo'], $_POST['cap'],
             $_POST['citta'], $_POST['provincia'], $_POST['partita_iva'],
-            $_POST['codice_fiscale'], $_POST['SDI'], intval($_POST['id_cliente']));
+            $_POST['codice_fiscale'], $_POST['SDI'], intval($_POST['id_cliente']), $tenant_id);
         mysqli_stmt_execute($stmt) ? set_flash('Cliente modificato con successo!', 'success') : set_flash('Errore durante la modifica.', 'danger');
         mysqli_stmt_close($stmt);
 
     } elseif ($action === 'delete') {
         $id = intval($_POST['id_cliente']);
-        $stmt_chk = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_fatture WHERE cliente_id = ?');
-        mysqli_stmt_bind_param($stmt_chk, 'i', $id);
+        $stmt_chk = mysqli_prepare($conn, 'SELECT COUNT(*) FROM tb_fatture WHERE cliente_id = ? AND tenant_id = ?');
+        mysqli_stmt_bind_param($stmt_chk, 'ii', $id, $tenant_id);
         mysqli_stmt_execute($stmt_chk);
         $n = intval(mysqli_stmt_get_result($stmt_chk)->fetch_row()[0]);
         mysqli_stmt_close($stmt_chk);
@@ -44,8 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($n > 0) {
             set_flash("Impossibile eliminare: $n fatture collegate a questo cliente.", 'danger');
         } else {
-            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_clienti WHERE id_cliente = ?');
-            mysqli_stmt_bind_param($stmt, 'i', $id);
+            $stmt = mysqli_prepare($conn, 'DELETE FROM tb_clienti WHERE id_cliente = ? AND tenant_id = ?');
+            mysqli_stmt_bind_param($stmt, 'ii', $id, $tenant_id);
             mysqli_stmt_execute($stmt) ? set_flash('Cliente eliminato.', 'success') : set_flash('Errore eliminazione.', 'danger');
             mysqli_stmt_close($stmt);
         }
@@ -55,7 +62,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-$clienti = mysqli_fetch_all(mysqli_query($conn, 'SELECT * FROM tb_clienti ORDER BY denominazione'), MYSQLI_ASSOC);
+$_stm_cl = mysqli_prepare($conn, 'SELECT * FROM tb_clienti WHERE tenant_id = ? ORDER BY denominazione');
+mysqli_stmt_bind_param($_stm_cl, 'i', $tenant_id);
+mysqli_stmt_execute($_stm_cl);
+$clienti = mysqli_fetch_all(mysqli_stmt_get_result($_stm_cl), MYSQLI_ASSOC);
 mysqli_close($conn);
 
 $page_title  = 'Gestione Clienti';
