@@ -1,0 +1,26 @@
+# Credenziali e configurazione locale
+.env
+config.local.php
+
+# File caricati dagli utenti (non in repository — montare come volume Docker)
+fatture_elettroniche/
+pdf/
+
+# Dump DB (può contenere dati sensibili)
+dump/
+
+# File di debug e test temporanei
+download_pdf_debug.php
+test_insert_fattura.php
+*.log
+*.tmp
+
+# IDE e OS
+.vscode/settings.json
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Claude Code sessions (log interni)
+.claude/sessions/
+.claude/settings.local.json
