@@ -3,8 +3,8 @@
  * Helper email per fatturapp.
  *
  * Usa PHP mail() — richiede un MTA configurato sul server (es. Postfix).
- * Per SMTP transazionale (Mailgun, SendGrid ecc.) impostare nel .env:
- *   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS
+ * Per SMTP transazionale (Gmail, Mailgun, ecc.) impostare nel .env:
+ *   SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD
  * e questa funzione utilizzerà una connessione socket diretta.
  */
 
@@ -38,8 +38,8 @@ function sendMail(string $to, string $subject, string $bodyHtml): bool {
 /** Invio via socket SMTP (TLS/STARTTLS). */
 function _sendSmtp(string $to, string $subject, string $body, string $headers, string $host): bool {
     $port = (int)(getenv('SMTP_PORT') ?: 587);
-    $user = getenv('SMTP_USER') ?: '';
-    $pass = getenv('SMTP_PASS') ?: '';
+    $user = getenv('SMTP_USERNAME') ?: '';
+    $pass = getenv('SMTP_PASSWORD') ?: '';
     $from = SMTP_FROM;
 
     $ctx = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
