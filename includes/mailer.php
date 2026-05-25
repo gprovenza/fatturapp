@@ -93,6 +93,43 @@ function mailPasswordResetHtml(string $link): string {
     );
 }
 
+/** Template HTML: promemoria trial in scadenza. */
+function mailTrialReminderHtml(string $upgradeLink, int $daysLeft): string {
+    $urgency = $daysLeft <= 1 ? 'Ultimo giorno!' : ($daysLeft <= 3 ? 'Ultimi giorni!' : "Ancora $daysLeft giorni");
+    return _mailTemplate(
+        "⏰ Il tuo trial fatturapp scade tra $daysLeft " . ($daysLeft === 1 ? 'giorno' : 'giorni'),
+        "<p>Ciao! Il tuo periodo di prova gratuita di <strong>fatturapp Pro</strong> sta per scadere.</p>
+         <p><strong>$urgency</strong> — non perdere l'accesso a:</p>
+         <ul style='color:#374151;padding-left:20px'>
+           <li>Fatture pro-forma illimitate</li>
+           <li>Clienti illimitati</li>
+           <li>Upload fatture elettroniche PDF + XML</li>
+           <li>Statistiche avanzate</li>
+         </ul>
+         <p>Abbonati a <strong>€ 7/mese</strong> e continua senza interruzioni.</p>",
+        '🚀 Attiva Piano Pro — € 7/mese',
+        $upgradeLink,
+        'Puoi cancellare l\'abbonamento in qualsiasi momento. Nessun impegno a lungo termine.'
+    );
+}
+
+/** Template HTML: trial scaduto → downgrade a Free. */
+function mailTrialExpiredHtml(string $upgradeLink): string {
+    return _mailTemplate(
+        'Il tuo trial fatturapp è scaduto',
+        '<p>Il tuo periodo di prova gratuita di <strong>fatturapp Pro</strong> è terminato.</p>
+         <p>Il tuo account è ora sul piano <strong>Free</strong> con le seguenti limitazioni:</p>
+         <ul style="color:#374151;padding-left:20px">
+           <li>Massimo 3 fatture pro-forma al mese</li>
+           <li>Massimo 2 clienti</li>
+         </ul>
+         <p>Abbonati a <strong>€ 7/mese</strong> per tornare alle funzionalità complete.</p>',
+        'Riattiva Piano Pro — € 7/mese',
+        $upgradeLink,
+        'I tuoi dati esistenti sono al sicuro e rimangono accessibili.'
+    );
+}
+
 /** Template HTML generico. */
 function _mailTemplate(string $title, string $body, string $btnLabel, string $btnLink, string $footer): string {
     $app = 'fatturapp';

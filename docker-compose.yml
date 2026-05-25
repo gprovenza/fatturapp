@@ -1,0 +1,138 @@
+# ============================================================
+# fatturapp — Docker Compose (produzione VPS)
+# ============================================================
+# Prerequisiti sul VPS:
+#   - Docker Engine 24+
+#   - Docker Compose v2
+#   - Nginx Proxy Manager già in esecuzione (network: proxy)
+#
+# Deploy:
+#   1. Copia questo file + .env sul VPS in /opt/fatturapp/
+#   2. cp .env.example .env && nano .env
+#   3. docker compose up -d
+#   4. mysql -u root -p fatturazione < migrations/001_saas_foundation.sql
+#   5. Configura Nginx Proxy Manager per puntare a fatturapp-apache:80
+# ============================================================
+
+services:
+
+  # ── PHP / Apache ─────────────────────────────────────────────
+  apache:
+    image: php:8.4-apache
+    container_name: fatturapp-apache
+    restart: unless-stopped
+    environment:
+      # Variabili d'ambiente lette da config.php
+      DB_SERVER: db
+      DB_USERNAME: ${DB_USERNAME:-fatturapp}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-fatturazione}
+      SITE_URL: ${SITE_URL}
+      PAYPAL_MODE: ${PAYPAL_MODE:-sandbox}
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
+      PAYPAL_PLAN_ID_PRO: ${PAYPAL_PLAN_ID_PRO}
+      PAYPAL_WEBHOOK_ID: ${PAYPAL_WEBHOOK_ID}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM:-noreply@fatturapp.it}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-fatturapp}
+    volumes:
+      # Codice applicazione (read-only in produzione idealmente)
+      - ./:/var/www/html/fatturazione:ro
+      # Directory upload: scrivibili da www-data
+      - fatturapp_pdf:/var/www/html/fatturazione/pdf
+      - fatturapp_elettroniche:/var/www/html/fatturazione/fatture_elettroniche
+      # Log Apache
+      - fatturapp_logs:/var/log/apache2
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - fatturapp_internal
+      - proxy
+    # Esponi solo sulla rete proxy (Nginx Proxy Manager gestisce l'esterno)
+    # Per accesso diretto senza proxy: ports: ["8080:80"]
+
+  # ── MariaDB ───────────────────────────────────────────────────
+  db:
+    image: mariadb:10.11
+    container_name: fatturapp-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-Smsdante1!}
+      MYSQL_DATABASE: ${DB_NAME:-fatturazione}
+      MYSQL_USER: ${DB_USERNAME:-fatturapp}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - fatturapp_db:/var/lib/mysql
+      # Inizializzazione DB al primo avvio (se dump presente)
+      # - ./dump/fatturazione.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - fatturapp_internal
+
+  # ── Cron (subscription maintenance) ──────────────────────────
+  cron:
+    image: php:8.4-cli
+    container_name: fatturapp-cron
+    restart: unless-stopped
+    environment:
+      DB_SERVER: db
+      DB_USERNAME: ${DB_USERNAME:-fatturapp}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-fatturazione}
+      SITE_URL: ${SITE_URL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM:-noreply@fatturapp.it}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-fatturapp}
+    volumes:
+      - ./:/var/www/html/fatturazione:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    # Esegue il cron ogni giorno alle 08:00
+    command: >
+      sh -c "
+        while true; do
+          HOUR=$$(date +%H);
+          MIN=$$(date +%M);
+          if [ \"$$HOUR\" = \"08\" ] && [ \"$$MIN\" = \"00\" ]; then
+            php /var/www/html/fatturazione/cron/subscription-maintenance.php;
+            sleep 60;
+          fi;
+          sleep 50;
+        done
+      "
+    networks:
+      - fatturapp_internal
+
+# ── Volumi persistenti ────────────────────────────────────────
+volumes:
+  fatturapp_db:
+    driver: local
+  fatturapp_pdf:
+    driver: local
+  fatturapp_elettroniche:
+    driver: local
+  fatturapp_logs:
+    driver: local
+
+# ── Reti ─────────────────────────────────────────────────────
+networks:
+  fatturapp_internal:
+    driver: bridge
+  proxy:
+    # Rete esterna gestita da Nginx Proxy Manager
+    # Se non esiste: docker network create proxy
+    external: true

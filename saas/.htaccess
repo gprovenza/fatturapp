@@ -1,0 +1,11 @@
+# Proteggi saas/ — le pagine sono PHP e richiedono sessione
+# Blocca listing directory
+Options -Indexes
+
+# Blocca accesso diretto ai file paypal/ interni (eccetto webhook)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Webhook PayPal: accessibile dall'esterno (PayPal lo chiama direttamente)
+    RewriteRule ^paypal/webhook\.php$ - [L]
+    # Gli altri file paypal/ NON accessibili direttamente (redirect interno via PHP)
+</IfModule>

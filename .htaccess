@@ -1,0 +1,99 @@
+# ============================================================
+# fatturapp — Apache .htaccess
+# Sicurezza, protezione file sensibili, redirect HTTPS
+# ============================================================
+
+Options -Indexes
+ServerSignature Off
+
+# ── Redirect HTTP → HTTPS ────────────────────────────────────
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Forza HTTPS (decommenta in produzione)
+    # RewriteCond %{HTTPS} off
+    # RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# ── Blocca accesso a file sensibili ─────────────────────────
+<FilesMatch "^(\.env|config\.local\.php|CLAUDE\.md|AGENTS\.md|DB_SCHEMA\.md|composer\.lock|package-lock\.json)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Blocca .htaccess innestati, file .git, ecc.
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# ── Proteggi directory cron/ e setup/ da browser ─────────────
+<IfModule mod_rewrite.c>
+    RewriteRule ^(cron|setup)/ - [F,L]
+</IfModule>
+
+# ── Blocca upload di file eseguibili ────────────────────────
+<FilesMatch "\.(php[0-9]?|phtml|phar|pl|cgi|sh)$">
+    <IfModule mod_authz_core.c>
+        # Permettiamo solo i PHP della radice + saas/ + includes/
+        # I file in fatture_elettroniche/ non devono essere eseguibili
+    </IfModule>
+</FilesMatch>
+
+# Blocca esecuzione PHP nella directory upload
+<IfModule mod_rewrite.c>
+    RewriteRule ^fatture_elettroniche/.*\.php$ - [F,L]
+    RewriteRule ^pdf/.*\.php$ - [F,L]
+</IfModule>
+
+# ── Headers di sicurezza ─────────────────────────────────────
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+
+    # Content-Security-Policy permissiva (adatta alla tua configurazione)
+    # Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; font-src 'self' cdn.jsdelivr.net; img-src 'self' data:;"
+
+    # HSTS (decommenta dopo aver verificato che HTTPS funzioni correttamente)
+    # Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+    # Rimuovi header che rivelano info server
+    Header always unset X-Powered-By
+    Header unset X-Powered-By
+</IfModule>
+
+# ── Cache per asset statici ──────────────────────────────────
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css             "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType image/png            "access plus 1 month"
+    ExpiresByType image/jpeg           "access plus 1 month"
+    ExpiresByType image/svg+xml        "access plus 1 month"
+    ExpiresByType application/font-woff2 "access plus 1 year"
+</IfModule>
+
+# ── Compressione GZIP ────────────────────────────────────────
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/css application/javascript text/javascript application/json
+</IfModule>
+
+# ── Protezione directory upload: force-download per PDF/XML ──
+<FilesMatch "\.(pdf|xml)$">
+    <IfModule mod_headers.c>
+        Header set X-Content-Type-Options "nosniff"
+    </IfModule>
+</FilesMatch>

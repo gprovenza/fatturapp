@@ -97,6 +97,19 @@ if [[ -f "${WEBROOT}/config.php" ]]; then
 fi
 
 # ──────────────────────────────────────────────
+# Script CLI (cron + setup): eseguibili da root, non da web
+# ──────────────────────────────────────────────
+for cli_script in \
+    "${WEBROOT}/cron/subscription-maintenance.php" \
+    "${WEBROOT}/setup/create-paypal-plan.php"; do
+    if [[ -f "$cli_script" ]]; then
+        chmod 750 "$cli_script"
+        chown root:root "$cli_script"
+        echo "      OK: $(basename $cli_script) → root:root 750"
+    fi
+done
+
+# ──────────────────────────────────────────────
 # Ripristino bit di esecuzione sullo script stesso
 # ──────────────────────────────────────────────
 chmod 750 "${WEBROOT}/fix_permissions.sh" 2>/dev/null || true

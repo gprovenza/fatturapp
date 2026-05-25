@@ -245,11 +245,111 @@ require_once 'includes/footer.php';
 | `fatture_elettroniche/` | PDF e XML caricati tramite `upload_fattura.php` |
 | `fpdf/` | Libreria FPDF per generazione PDF |
 | `dump/fatturazione.sql` | Ultimo dump del DB (da aggiornare periodicamente) |
-| `.env` | Credenziali DB e SITE_URL (NON in repository) |
+| `.env` | Credenziali DB, PayPal, SMTP (NON in repository) |
+| `.env.example` | Template variabili d'ambiente (in repository) |
 | `CLAUDE.md` | Istruzioni brevi per Claude Code |
 | `AGENTS.md` | Questo file |
 | `DB_SCHEMA.md` | Schema completo del database |
-| `CONVERSATION_LOG.md` | Log modifiche e piani futuri |
+| `docker-compose.yml` | Stack Docker per VPS (apache + mariadb + cron) |
+| `Dockerfile` | Immagine PHP 8.4 + Apache con estensioni necessarie |
+
+---
+
+## Architettura SaaS (migrazione in corso)
+
+Il progetto è in fase di trasformazione da tool personale a **micro-SaaS** (€7/mese).
+
+### Struttura directory SaaS
+
+```
+saas/
+├── register.php          Registrazione autonoma utenti
+├── verify.php            Verifica email (link da email)
+├── forgot-password.php   Richiesta reset password
+├── reset-password.php    Cambio password via token
+├── billing.php           Stato abbonamento + storico pagamenti
+├── plans.php             Confronto Free/Pro + CTA upgrade
+├── gdpr-export.php       Export dati JSON (GDPR Art.20)
+├── .htaccess             Protezione directory
+├── paypal/
+│   ├── paypal-api.php           Helper REST API PayPal
+│   ├── create-subscription.php  Avvio flusso abbonamento
+│   ├── success.php              Ritorno da PayPal (attiva sub)
+│   ├── cancel.php               Utente annulla su PayPal
+│   ├── cancel-subscription.php  Cancellazione dal portale
+│   └── webhook.php              Handler eventi PayPal (IPN)
+└── admin/
+    ├── auth.php          Guard isSaasAdmin()
+    ├── dashboard.php     KPI: MRR, trial, pagamenti
+    ├── tenants.php       Lista + gestione tenant
+    └── setup.php         Checklist configurazione piattaforma
+
+cron/
+└── subscription-maintenance.php  Giornaliero: trial→expired, reminder, cleanup
+
+setup/
+└── create-paypal-plan.php  CLI: crea prodotto+piano PayPal, stampa PLAN_ID
+
+includes/
+├── tenant.php   Middleware multi-tenancy (getTenantId, canCreate, requireActiveSub…)
+└── mailer.php   sendMail() + template email (verifica, reset, trial reminder)
+```
+
+### Tabelle SaaS (non modificare le business)
+
+| Tabella | Scopo |
+|---------|-------|
+| `saas_plans` | Piani Free/Pro con limiti (max_fatture_mese, max_clienti) |
+| `saas_tenants` | Un record per cliente SaaS; owner_user_id = tb_utenti.id_utente |
+| `saas_subscriptions` | Abbonamento attivo: status (trial/active/expired/cancelled), paypal_subscription_id |
+| `saas_payments` | Storico pagamenti PayPal (amount, provider_payment_id, paid_at) |
+| `saas_tenant_settings` | KV store per-tenant: prefisso_fattura, progressivo_fattura, anno_progressivo |
+| `saas_gdpr_exports` | Registro richieste export dati (GDPR Art.20) |
+
+### Regole multi-tenancy
+
+- **Ogni query** sulle tabelle business include `AND tenant_id = ?` (o `WHERE tenant_id = ?`)
+- **Ogni INSERT** business include la colonna `tenant_id`
+- `getTenantId()` legge da `$_SESSION['tenant_id']` (popolato al login)
+- `canCreate('fattura'|'cliente', $conn)` controlla i limiti del piano Free
+- `requireActiveSub()` redirect a `saas/billing.php` se sub scaduta
+- L'admin SaaS (tenant_id=1, ruolo=admin) bypassa tutti i controlli piano
+
+### Flusso abbonamento PayPal
+
+```
+Utente → saas/plans.php
+       → saas/paypal/create-subscription.php  (crea sub PayPal → salva ID in sessione)
+       → PayPal.com (approvazione utente)
+       → saas/paypal/success.php  (attiva sub nel DB, refresh sessione)
+
+Webhook (asincrono):
+PayPal → saas/paypal/webhook.php
+         PAYMENT.SALE.COMPLETED    → rinnova current_period_end, registra pagamento
+         BILLING.SUBSCRIPTION.*    → aggiorna status abbonamento
+```
+
+### Deploy su VPS
+
+```bash
+# 1. Copia file sul server
+rsync -av --exclude='.git' --exclude='.env' . root@dev.local:/var/www/html/fatturazione/
+
+# 2. Fix permessi
+sudo bash /var/www/html/fatturazione/fix_permissions.sh
+
+# 3. Prima volta: migration DB
+mysql -u root -p fatturazione < /var/www/html/fatturazione/migrations/001_saas_foundation.sql
+
+# 4. Prima volta: crea piano PayPal
+php /var/www/html/fatturazione/setup/create-paypal-plan.php
+
+# 5. Configura cron (giornaliero alle 08:00)
+echo "0 8 * * * /usr/bin/php /var/www/html/fatturazione/cron/subscription-maintenance.php >> /var/log/fatturapp-cron.log 2>&1" | crontab -
+
+# Con Docker:
+cd /opt/fatturapp && docker compose up -d
+```
 
 ---
 
@@ -257,6 +357,10 @@ require_once 'includes/footer.php';
 
 1. **Non duplicare `session_start()`** — `auth.php` lo gestisce già con il guard `PHP_SESSION_NONE`
 2. **Sempre CSRF** su ogni form POST e ogni handler AJAX — `csrf_field()` nel form, `csrf_verify()` nell'handler
-3. **Upload fattura elettronica standalone** — se non c'è pro-forma collegata, `upload_fattura.php` crea automaticamente un record fittizio in `tb_fatture` per mantenere la coerenza referenziale
+3. **Upload fattura elettronica standalone** — se non c'è pro-forma collegata, `upload_fattura.php` crea automaticamente un record in `tb_fatture` per mantenere la coerenza referenziale
 4. **Tasse%** — leggere sempre da `tb_anagrafiche.tasse_percentuale`, non usare la costante come valore primario
-5. **Il DB dump in `dump/` può essere stale** — importarlo localmente per verifiche, ma non fidarsi dei dati come fonte di verità assoluta
+5. **Il DB dump in `dump/` può essere stale** — importarlo localmente per verifiche, non come fonte di verità
+6. **Colonne saas_plans**: usa `price_monthly` (non `price_eur`), `display_name` per UI
+7. **Colonne saas_payments**: usa `amount` (non `amount_eur`), `provider_payment_id` (non `paypal_transaction_id`)
+8. **saas_subscriptions**: nessun UNIQUE su tenant_id — usare sempre UPDATE (non INSERT ON DUPLICATE KEY)
+9. **getTenantPlan()** restituisce chiavi `name` e `status` (non `plan_name`/`sub_status` che sono i nomi delle session vars grezze)
