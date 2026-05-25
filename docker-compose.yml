@@ -1,75 +1,102 @@
 # ============================================================
-# fatturapp — Docker Compose (produzione VPS)
+# fatturapp — Docker Compose per Portainer
 # ============================================================
-# Prerequisiti sul VPS:
-#   - Docker Engine 24+
-#   - Docker Compose v2
-#   - Nginx Proxy Manager già in esecuzione (network: proxy)
 #
-# Deploy:
-#   1. Copia questo file + .env sul VPS in /opt/fatturapp/
-#   2. cp .env.example .env && nano .env
-#   3. docker compose up -d
-#   4. mysql -u root -p fatturazione < migrations/001_saas_foundation.sql
-#   5. Configura Nginx Proxy Manager per puntare a fatturapp-apache:80
+# DEPLOY VIA PORTAINER (Stack):
+#   1. Portainer → Stacks → Add Stack → Repository
+#      Repository URL: https://github.com/gprovenza/fatturapp
+#      Compose path:   docker-compose.yml
+#   2. Compila le Environment Variables nella sezione "Env"
+#      (vedi lista sotto — le obbligatorie sono marcate con *)
+#   3. Click "Deploy the stack"
+#
+# PRIMA ESECUZIONE — inizializzazione DB:
+#   Portainer → Containers → fatturapp-db → Console:
+#   $ mysql -u root -p$MYSQL_ROOT_PASSWORD fatturazione \
+#       < /docker-entrypoint-initdb.d/001_saas_foundation.sql
+#
+# ENVIRONMENT VARIABLES (da impostare in Portainer):
+# ┌─────────────────────────┬──────────────────────────────────┬─────────┐
+# │ Nome                    │ Esempio                          │ Obblig. │
+# ├─────────────────────────┼──────────────────────────────────┼─────────┤
+# │ DB_PASSWORD             │ s3cret_db_password               │   *     │
+# │ DB_ROOT_PASSWORD        │ s3cret_root_password             │   *     │
+# │ SITE_URL                │ https://miosito.it/fatturazione/ │   *     │
+# │ PAYPAL_CLIENT_ID        │ AaBbCc...                        │   *     │
+# │ PAYPAL_CLIENT_SECRET    │ EeFfGg...                        │   *     │
+# │ PAYPAL_PLAN_ID_PRO      │ P-XXXXXXXXXXXXXXXXXXXXXX         │   *     │
+# │ PAYPAL_MODE             │ sandbox  oppure  live            │         │
+# │ PAYPAL_WEBHOOK_ID       │ WHxxxxxxxxxxxxxxxxx              │         │
+# │ SMTP_HOST               │ smtp.gmail.com                   │         │
+# │ SMTP_PORT               │ 587                              │         │
+# │ SMTP_USERNAME           │ tua@email.it                     │         │
+# │ SMTP_PASSWORD           │ app-password-gmail               │         │
+# │ SMTP_FROM               │ noreply@fatturapp.it             │         │
+# │ SMTP_FROM_NAME          │ fatturapp                        │         │
+# │ DB_USERNAME             │ fatturapp  (default)             │         │
+# │ DB_NAME                 │ fatturazione  (default)          │         │
+# └─────────────────────────┴──────────────────────────────────┴─────────┘
+#
+# AGGIORNAMENTO (nuovo rilascio):
+#   Portainer → Stacks → fatturapp → Editor → Update the stack
+#   oppure: Portainer → Containers → fatturapp-web → Recreate
 # ============================================================
 
 services:
 
-  # ── PHP / Apache ─────────────────────────────────────────────
-  apache:
-    image: php:8.4-apache
-    container_name: fatturapp-apache
+  # ── Web (PHP 8.4 + Apache) ───────────────────────────────────
+  # Immagine precostruita automaticamente da GitHub Actions e
+  # pubblicata su GHCR ad ogni push su main.
+  web:
+    image: ghcr.io/gprovenza/fatturapp:latest
+    container_name: fatturapp-web
     restart: unless-stopped
+    pull_policy: always          # Portainer scarica l'ultima immagine ad ogni deploy
     environment:
-      # Variabili d'ambiente lette da config.php
-      DB_SERVER: db
-      DB_USERNAME: ${DB_USERNAME:-fatturapp}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME:-fatturazione}
-      SITE_URL: ${SITE_URL}
-      PAYPAL_MODE: ${PAYPAL_MODE:-sandbox}
-      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
-      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
-      PAYPAL_PLAN_ID_PRO: ${PAYPAL_PLAN_ID_PRO}
-      PAYPAL_WEBHOOK_ID: ${PAYPAL_WEBHOOK_ID}
-      SMTP_HOST: ${SMTP_HOST}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME}
-      SMTP_PASSWORD: ${SMTP_PASSWORD}
-      SMTP_FROM: ${SMTP_FROM:-noreply@fatturapp.it}
-      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-fatturapp}
+      DB_SERVER:           db
+      DB_USERNAME:         ${DB_USERNAME:-fatturapp}
+      DB_PASSWORD:         ${DB_PASSWORD}
+      DB_NAME:             ${DB_NAME:-fatturazione}
+      SITE_URL:            ${SITE_URL}
+      PAYPAL_MODE:         ${PAYPAL_MODE:-sandbox}
+      PAYPAL_CLIENT_ID:    ${PAYPAL_CLIENT_ID}
+      PAYPAL_CLIENT_SECRET:${PAYPAL_CLIENT_SECRET}
+      PAYPAL_PLAN_ID_PRO:  ${PAYPAL_PLAN_ID_PRO}
+      PAYPAL_WEBHOOK_ID:   ${PAYPAL_WEBHOOK_ID:-}
+      SMTP_HOST:           ${SMTP_HOST:-}
+      SMTP_PORT:           ${SMTP_PORT:-587}
+      SMTP_USERNAME:       ${SMTP_USERNAME:-}
+      SMTP_PASSWORD:       ${SMTP_PASSWORD:-}
+      SMTP_FROM:           ${SMTP_FROM:-noreply@fatturapp.it}
+      SMTP_FROM_NAME:      ${SMTP_FROM_NAME:-fatturapp}
     volumes:
-      # Codice applicazione (read-only in produzione idealmente)
-      - ./:/var/www/html/fatturazione:ro
-      # Directory upload: scrivibili da www-data
+      # Dati utente persistenti (upload PDF e XML fatture)
+      # Il codice PHP è nell'immagine — non serve bind-mount
       - fatturapp_pdf:/var/www/html/fatturazione/pdf
       - fatturapp_elettroniche:/var/www/html/fatturazione/fatture_elettroniche
-      # Log Apache
-      - fatturapp_logs:/var/log/apache2
     depends_on:
       db:
         condition: service_healthy
     networks:
       - fatturapp_internal
-      - proxy
-    # Esponi solo sulla rete proxy (Nginx Proxy Manager gestisce l'esterno)
-    # Per accesso diretto senza proxy: ports: ["8080:80"]
+      - proxy                    # rete di Nginx Proxy Manager
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"   # opzionale: auto-update con Watchtower
 
-  # ── MariaDB ───────────────────────────────────────────────────
+  # ── MariaDB 10.11 ────────────────────────────────────────────
   db:
     image: mariadb:10.11
     container_name: fatturapp-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-Smsdante1!}
-      MYSQL_DATABASE: ${DB_NAME:-fatturazione}
-      MYSQL_USER: ${DB_USERNAME:-fatturapp}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE:      ${DB_NAME:-fatturazione}
+      MYSQL_USER:          ${DB_USERNAME:-fatturapp}
+      MYSQL_PASSWORD:      ${DB_PASSWORD}
     volumes:
       - fatturapp_db:/var/lib/mysql
-      # Inizializzazione DB al primo avvio (se dump presente)
-      # - ./dump/fatturazione.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      # La migration viene eseguita automaticamente dall'entrypoint del container web
+      # al primo avvio, se le tabelle SaaS non esistono ancora.
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -79,45 +106,45 @@ services:
     networks:
       - fatturapp_internal
 
-  # ── Cron (subscription maintenance) ──────────────────────────
+  # ── Cron — manutenzione abbonamenti (giornaliero) ────────────
+  # Usa la stessa immagine del web: ha già il codice e le dipendenze.
   cron:
-    image: php:8.4-cli
+    image: ghcr.io/gprovenza/fatturapp:latest
     container_name: fatturapp-cron
     restart: unless-stopped
+    pull_policy: always
     environment:
-      DB_SERVER: db
-      DB_USERNAME: ${DB_USERNAME:-fatturapp}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME:-fatturazione}
-      SITE_URL: ${SITE_URL}
-      SMTP_HOST: ${SMTP_HOST}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME}
-      SMTP_PASSWORD: ${SMTP_PASSWORD}
-      SMTP_FROM: ${SMTP_FROM:-noreply@fatturapp.it}
-      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-fatturapp}
-    volumes:
-      - ./:/var/www/html/fatturazione:ro
+      DB_SERVER:    db
+      DB_USERNAME:  ${DB_USERNAME:-fatturapp}
+      DB_PASSWORD:  ${DB_PASSWORD}
+      DB_NAME:      ${DB_NAME:-fatturazione}
+      SITE_URL:     ${SITE_URL}
+      SMTP_HOST:    ${SMTP_HOST:-}
+      SMTP_PORT:    ${SMTP_PORT:-587}
+      SMTP_USERNAME:${SMTP_USERNAME:-}
+      SMTP_PASSWORD:${SMTP_PASSWORD:-}
+      SMTP_FROM:    ${SMTP_FROM:-noreply@fatturapp.it}
+      SMTP_FROM_NAME:${SMTP_FROM_NAME:-fatturapp}
+    # Sostituisce il CMD Apache con un loop che lancia il cron alle 08:00
+    command: >
+      sh -c "
+        echo 'fatturapp-cron avviato. Esegue manutenzione ogni giorno alle 08:00.';
+        while true; do
+          if [ \"$$(date +%H%M)\" = '0800' ]; then
+            echo \"[$$(date '+%Y-%m-%d %H:%M')] Avvio subscription-maintenance...\";
+            php /var/www/html/fatturazione/cron/subscription-maintenance.php;
+            sleep 61;
+          fi;
+          sleep 55;
+        done
+      "
     depends_on:
       db:
         condition: service_healthy
-    # Esegue il cron ogni giorno alle 08:00
-    command: >
-      sh -c "
-        while true; do
-          HOUR=$$(date +%H);
-          MIN=$$(date +%M);
-          if [ \"$$HOUR\" = \"08\" ] && [ \"$$MIN\" = \"00\" ]; then
-            php /var/www/html/fatturazione/cron/subscription-maintenance.php;
-            sleep 60;
-          fi;
-          sleep 50;
-        done
-      "
     networks:
       - fatturapp_internal
 
-# ── Volumi persistenti ────────────────────────────────────────
+# ── Volumi nominati (persistono tra i deploy) ─────────────────
 volumes:
   fatturapp_db:
     driver: local
@@ -125,14 +152,12 @@ volumes:
     driver: local
   fatturapp_elettroniche:
     driver: local
-  fatturapp_logs:
-    driver: local
 
-# ── Reti ─────────────────────────────────────────────────────
+# ── Reti ──────────────────────────────────────────────────────
 networks:
   fatturapp_internal:
     driver: bridge
+    internal: true              # isolata: solo i container interni comunicano
   proxy:
-    # Rete esterna gestita da Nginx Proxy Manager
-    # Se non esiste: docker network create proxy
-    external: true
+    external: true              # rete Nginx Proxy Manager — creare con:
+                                # docker network create proxy

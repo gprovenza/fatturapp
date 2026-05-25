@@ -1,0 +1,29 @@
+# File sensibili — mai nell'immagine Docker
+.env
+config.local.php
+
+# Dati utente — montati come volumi separati
+pdf/
+fatture_elettroniche/
+
+# Dump DB (può contenere dati sensibili)
+dump/
+
+# Git e IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Documentazione (non necessaria a runtime)
+*.md
+CONVERSATION_LOG.md
+
+# Test e debug
+*.log
+*.tmp
+test_*.php
+*_debug.php
+
+# File CI/CD locali
+.github/
