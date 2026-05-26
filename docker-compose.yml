@@ -60,7 +60,7 @@ services:
       SITE_URL:            ${SITE_URL}
       PAYPAL_MODE:         ${PAYPAL_MODE:-sandbox}
       PAYPAL_CLIENT_ID:    ${PAYPAL_CLIENT_ID}
-      PAYPAL_CLIENT_SECRET:${PAYPAL_CLIENT_SECRET}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
       PAYPAL_PLAN_ID_PRO:  ${PAYPAL_PLAN_ID_PRO}
       PAYPAL_WEBHOOK_ID:   ${PAYPAL_WEBHOOK_ID:-}
       SMTP_HOST:           ${SMTP_HOST:-}
@@ -121,10 +121,10 @@ services:
       SITE_URL:     ${SITE_URL}
       SMTP_HOST:    ${SMTP_HOST:-}
       SMTP_PORT:    ${SMTP_PORT:-587}
-      SMTP_USERNAME:${SMTP_USERNAME:-}
-      SMTP_PASSWORD:${SMTP_PASSWORD:-}
-      SMTP_FROM:    ${SMTP_FROM:-noreply@fatturapp.it}
-      SMTP_FROM_NAME:${SMTP_FROM_NAME:-fatturapp}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM:     ${SMTP_FROM:-noreply@fatturapp.it}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-fatturapp}
     # Sostituisce il CMD Apache con un loop che lancia il cron alle 08:00
     command: >
       sh -c "
