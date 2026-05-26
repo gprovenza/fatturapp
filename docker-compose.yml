@@ -74,12 +74,13 @@ services:
       # Il codice PHP è nell'immagine — non serve bind-mount
       - fatturapp_pdf:/var/www/html/fatturazione/pdf
       - fatturapp_elettroniche:/var/www/html/fatturazione/fatture_elettroniche
+    ports:
+      - "8082:80"                # NPM → Forward Hostname: localhost, Port: 8082
     depends_on:
       db:
         condition: service_healthy
     networks:
       - fatturapp_internal
-      - proxy                    # rete condivisa con Nginx Proxy Manager
     labels:
       - "com.centurylinklabs.watchtower.enable=true"   # opzionale: auto-update con Watchtower
 
@@ -158,6 +159,3 @@ networks:
   fatturapp_internal:
     driver: bridge
     internal: true              # isolata: solo i container interni comunicano
-  proxy:
-    external: true              # rete condivisa con NPM — creare prima del deploy:
-                                # docker network create proxy
